@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Writers Room: The Mischief Engine</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <h1>🎬 WRITERS ROOM: THE MISCHIEF ENGINE</h1>
+        <p>Where legendary writers collaborate and compete in real-time</p>
+    </div>
+
+    <div class="container">
+        <!-- Control Panel -->
+        <div class="control-panel">
+            <h2>📝 Story Configuration</h2>
+
+            <div class="form-group">
+                <label for="prompt">Story Prompt</label>
+                <textarea id="prompt" placeholder="Enter your story prompt... (e.g., A man discovers a mysterious door in his basement)"></textarea>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="rounds">Number of Rounds</label>
+                    <input type="number" id="rounds" value="3" min="1" max="10">
+                </div>
+
+                <div class="form-group">
+                    <label for="temperature">Creativity (Temperature)</label>
+                    <input type="number" id="temperature" value="0.9" min="0" max="2" step="0.1">
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="producer-enabled" checked>
+                        <label for="producer-enabled">Enable Producer (Judge & Score)</label>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="fire-worst">
+                        <label for="fire-worst">Fire Worst Performer</label>
+                    </div>
+                </div>
+            </div>
+
+            <button class="btn btn-primary" id="start-btn" onclick="startSession()">
+                🎬 Start Writers Room
+            </button>
+        </div>
+
+        <!-- Status Banner -->
+        <div class="status-banner" id="status-banner">
+            <div class="status-icon">⏳</div>
+            <div class="status-text">
+                <strong>Session Active</strong>
+                <div id="status-detail">Initializing...</div>
+            </div>
+        </div>
+
+        <!-- Leaderboard (hidden until Producer evaluates) -->
+        <div class="leaderboard hidden" id="leaderboard">
+            <h2>📊 Leaderboard</h2>
+            <ul class="leaderboard-list" id="leaderboard-list">
+                <!-- Populated by JavaScript -->
+            </ul>
+        </div>
+
+        <!-- Winner Banner (hidden until session complete) -->
+        <div class="winner-banner hidden" id="winner-banner">
+            <h2>🏆 Winner</h2>
+            <div class="winner-name" id="winner-name"></div>
+            <div class="winner-score" id="winner-score"></div>
+        </div>
+
+        <!-- Fired Banner (hidden unless fire-worst enabled) -->
+        <div class="fired-banner hidden" id="fired-banner">
+            <h2>🔥 FIRED!</h2>
+            <div class="winner-name" id="fired-name"></div>
+            <div class="winner-score" id="fired-score"></div>
+        </div>
+
+        <!-- Agent Grid -->
+        <div class="agent-grid" id="agent-grid">
+            <!-- Rod Serling -->
+            <div class="agent-card" id="agent-rod-serling">
+                <div class="agent-header">
+                    <div class="agent-name text-cyan">Rod Serling</div>
+                    <div class="agent-status" id="status-rod-serling">Waiting...</div>
+                </div>
+                <div class="agent-responses" id="responses-rod-serling">
+                    <p style="color: #666; font-style: italic;">The Twilight Zone creator awaits...</p>
+                </div>
+            </div>
+
+            <!-- Stephen King -->
+            <div class="agent-card" id="agent-stephen-king">
+                <div class="agent-header">
+                    <div class="agent-name text-red">Stephen King</div>
+                    <div class="agent-status" id="status-stephen-king">Waiting...</div>
+                </div>
+                <div class="agent-responses" id="responses-stephen-king">
+                    <p style="color: #666; font-style: italic;">The Master of Horror is ready...</p>
+                </div>
+            </div>
+
+            <!-- H.P. Lovecraft -->
+            <div class="agent-card" id="agent-hp-lovecraft">
+                <div class="agent-header">
+                    <div class="agent-name text-magenta">H.P. Lovecraft</div>
+                    <div class="agent-status" id="status-hp-lovecraft">Waiting...</div>
+                </div>
+                <div class="agent-responses" id="responses-hp-lovecraft">
+                    <p style="color: #666; font-style: italic;">The Void Scrivener stirs...</p>
+                </div>
+            </div>
+
+            <!-- Jorge Luis Borges -->
+            <div class="agent-card" id="agent-jorge-borges">
+                <div class="agent-header">
+                    <div class="agent-name text-blue">Jorge Luis Borges</div>
+                    <div class="agent-status" id="status-jorge-borges">Waiting...</div>
+                </div>
+                <div class="agent-responses" id="responses-jorge-borges">
+                    <p style="color: #666; font-style: italic;">The Labyrinth Maker contemplates...</p>
+                </div>
+            </div>
+
+            <!-- Robert Stack -->
+            <div class="agent-card" id="agent-robert-stack">
+                <div class="agent-header">
+                    <div class="agent-name text-white">Robert Stack</div>
+                    <div class="agent-status" id="status-robert-stack">Waiting...</div>
+                </div>
+                <div class="agent-responses" id="responses-robert-stack">
+                    <p style="color: #666; font-style: italic;">Unsolved Mysteries host investigates...</p>
+                </div>
+            </div>
+
+            <!-- RIP Tequila Bot -->
+            <div class="agent-card" id="agent-rip-tequila-bot">
+                <div class="agent-header">
+                    <div class="agent-name text-yellow">RIP Tequila Bot</div>
+                    <div class="agent-status" id="status-rip-tequila-bot">Waiting...</div>
+                </div>
+                <div class="agent-responses" id="responses-rip-tequila-bot">
+                    <p style="color: #666; font-style: italic;">Time to RIP!</p>
+                </div>
+            </div>
+
+            <!-- The Producer (hidden initially) -->
+            <div class="agent-card producer-card hidden" id="agent-the-producer">
+                <div class="agent-header">
+                    <div class="agent-name text-green">🎬 The Producer</div>
+                    <div class="agent-status" id="status-the-producer">Waiting...</div>
+                </div>
+                <div class="agent-responses" id="responses-the-producer">
+                    <p style="color: #666; font-style: italic;">The judge is watching...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

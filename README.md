@@ -20,7 +20,7 @@ The project is built with the following structure to keep the logic clean and mo
 
 /writers-room
 │
-├── main.py              # The orchestrator (game loop)
+├── main.py              # The CLI orchestrator (game loop)
 ├── agents.py            # The Agent class definition & OpenRouter API logic
 ├── personalities.py     # The System Prompts (The "Soul" of the agents)
 ├── debug_model.py       # Testing utility for model behavior
@@ -29,14 +29,24 @@ The project is built with the following structure to keep the logic clean and mo
 ├── requirements.txt     # Dependencies
 ├── transcripts/         # Folder to save the chaotic outputs (auto-created)
 │
+├── web/                 # Web interface (Phase 5)
+│   ├── app.py           # Flask + SocketIO backend
+│   ├── static/
+│   │   ├── css/
+│   │   │   └── style.css        # Dark theme styling
+│   │   └── js/
+│   │       └── app.js           # Frontend WebSocket logic
+│   └── templates/
+│       └── index.html   # Main UI
+│
 ├── README.md            # This file
 ├── SETUP.md             # Detailed setup instructions
 ├── ROADMAP.md           # Development phases and future plans
 ├── PHASE1_COMPLETE.md   # Phase 1 summary
 ├── PHASE2_COMPLETE.md   # Phase 2 features and usage
+├── PHASE3_COMPLETE.md   # Phase 3 Producer agent
+├── PHASE5_COMPLETE.md   # Phase 5 web interface
 └── CHANGELOG.md         # Version history
-
-Note: web/ folder (Phase 5) does not exist yet.
 
 
 3. Configuration (OpenRouter)
@@ -150,7 +160,7 @@ Follow these steps to get the writers room running:
 
 See `PHASE2_COMPLETE.md` for full documentation.
 
-## Phase 3 Features (New! 🎬)
+## Phase 3 Features
 
 - **The Producer**: A snarky Hollywood executive judges all writers after each round
 - **Scoring System**: Each writer receives 1-10 scores with commentary
@@ -160,6 +170,20 @@ See `PHASE2_COMPLETE.md` for full documentation.
 - **Disable Producer**: Use `--no-producer` to run without judging
 
 See `PHASE3_COMPLETE.md` for full documentation.
+
+## Phase 5 Features (New! 🌐)
+
+- **Dark-Themed Web UI**: Beautiful black/purple gradient interface
+- **Real-Time Streaming**: Watch agents think and respond live via WebSockets
+- **Agent Cards**: Six color-coded writer cards plus Producer in responsive grid
+- **Live Leaderboards**: Visual rankings with medals update automatically
+- **Configuration Panel**: Control rounds, temperature, Producer, and fire-worst
+- **Status Tracking**: Live updates showing current round and activity
+- **Winner Animations**: Dramatic winner and loser announcements
+
+**Quick Start**: `cd web && python app.py` then visit http://localhost:5000
+
+See `PHASE5_COMPLETE.md` for full documentation.
 
 7. Future Expansions
 

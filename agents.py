@@ -73,9 +73,9 @@ class Agent:
         for i, msg in enumerate(recent_context):
             content = msg.get("content", "")
             # Keep first message (user prompt) intact, truncate the rest
-            if i > 0 and len(content) > 200:
+            if i > 0 and len(content) > 500:
                 # Keep only the end for story flow
-                content = "..." + content[-200:]
+                content = "..." + content[-500:]
             safe_context.append({"role": msg["role"], "content": content})
 
         # Build the full message list with proper system role for personality
