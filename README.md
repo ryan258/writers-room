@@ -18,29 +18,25 @@ Library: openai (Python client, compatible with OpenRouter endpoints).
 
 The project is built with the following structure to keep the logic clean and modular.
 
-/agent-swarm-writers-room
+/writers-room
 │
 ├── main.py              # The orchestrator (game loop)
 ├── agents.py            # The Agent class definition & OpenRouter API logic
 ├── personalities.py     # The System Prompts (The "Soul" of the agents)
+├── debug_model.py       # Testing utility for model behavior
 ├── .env                 # API Keys (gitignored)
+├── .env.example         # Template for environment variables
 ├── requirements.txt     # Dependencies
-├── transcripts/         # Folder to save the chaotic outputs
+├── transcripts/         # Folder to save the chaotic outputs (auto-created)
 │
-├── web/                 # Web interface (Phase 5)
-│   ├── app.py           # Flask/FastAPI backend
-│   ├── static/
-│   │   ├── css/
-│   │   │   └── style.css        # Dark theme styling
-│   │   ├── js/
-│   │   │   └── app.js           # Frontend logic
-│   │   └── images/
-│   │       ├── toaster.svg      # Agent Bob icon
-│   │       └── skull-tequila.svg # Agent RIP icon
-│   └── templates/
-│       └── index.html   # Main UI (based on ui.png design)
-│
-└── ui.png               # UI design reference
+├── README.md            # This file
+├── SETUP.md             # Detailed setup instructions
+├── ROADMAP.md           # Development phases and future plans
+├── PHASE1_COMPLETE.md   # Phase 1 summary
+├── PHASE2_COMPLETE.md   # Phase 2 features and usage
+└── CHANGELOG.md         # Version history
+
+Note: web/ folder (Phase 5) does not exist yet.
 
 
 3. Configuration (OpenRouter)
@@ -56,7 +52,7 @@ YOUR_SITE_NAME=AgentSwarmLocal
 
 Recommended Model Mapping (Free/Cheap Tier):
 
-All agents are currently configured to use `nvidia/nemotron-nano-12b-v2-vl:free` (a visual-language model), but this can be changed in `personalities.py`.
+All agents are currently configured to use `mistralai/ministral-3b-2512` (a free/cheap fast model), but this can be changed in `personalities.py` or overridden with the `-m` flag.
 
 4. The Agents (System Prompts)
 
@@ -92,14 +88,18 @@ The script runs in a "Round Robin" conversation loop.
 
 User Input: User provides a seed prompt (e.g., "A man discovers a mysterious door in his basement.")
 
-Turn 1-5: The legendary writers add their unique spin (Serling's moral, King's backstory, Lovecraft's dread, Borges' paradox, Stack's mystery).
+Turn 1-6: All six agents respond in order:
+1. Rod Serling - adds ironic moral twist
+2. Stephen King - develops character backstory/horror
+3. H.P. Lovecraft - introduces cosmic dread
+4. Jorge Luis Borges - creates philosophical paradox
+5. Robert Stack - poses eerie mystery question
+6. RIP Tequila Bot - inserts shameless product placement
 
-Turn 6: RIP Tequila Bot interrupts to suggest where the bottle placement goes.
-
-Rounds: The cycle repeats for 3 rounds.
+Rounds: The cycle repeats for a configurable number of rounds (user is prompted, or use `-r` flag).
 
 Key Feature - The "Context Window":
-Pass the previous turns to the current agent so they can "react" to each other.
+Each agent sees the original user prompt plus the last 4 messages, allowing them to react to recent developments while staying on topic.
 
 6. Quick Start (Activation & Running)
 
@@ -126,13 +126,29 @@ Follow these steps to get the writers room running:
 
 3.  **Run the Simulation:**
     ```bash
+    # Basic usage
     python main.py
+
+    # With Phase 2 options
+    python main.py -r 5 -t 1.2  # 5 rounds, more creative
+    python main.py --help       # See all options
     ```
 
 4.  **Deactivate when done:**
     ```bash
     deactivate
     ```
+
+## Phase 2 Features (New!)
+
+- **Configurable Rounds**: Choose how many rounds to run
+- **Continue Option**: Keep going after rounds complete
+- **Model Override**: Try different models (`-m` flag)
+- **Temperature Control**: Adjust creativity (`-t` flag, 0.0-2.0)
+- **API Validation**: Automatic key validation on startup
+- **Better Error Handling**: Clear, helpful error messages
+
+See `PHASE2_COMPLETE.md` for full documentation.
 
 7. Future Expansions
 

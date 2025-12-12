@@ -34,8 +34,28 @@ pip install -r requirements.txt
 
 ### Step 3: Run the Writers Room!
 
+**Basic usage:**
 ```bash
 python main.py
+```
+
+**With options (Phase 2):**
+```bash
+# Specify number of rounds
+python main.py -r 5
+
+# Use a different model
+python main.py -m "mistralai/mistral-7b-instruct"
+
+# Adjust creativity (temperature)
+python main.py -t 1.5  # More creative
+python main.py -t 0.3  # More focused
+
+# Quick session (no continue prompt)
+python main.py -r 3 --no-continue
+
+# See all options
+python main.py --help
 ```
 
 ## What to Expect

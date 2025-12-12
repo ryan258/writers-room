@@ -14,7 +14,7 @@ load_dotenv()
 class Agent:
     """An AI agent with a specific personality and model."""
 
-    def __init__(self, name: str, model: str, system_prompt: str):
+    def __init__(self, name: str, model: str, system_prompt: str, temperature: float = 0.9):
         """
         Initialize an AI agent.
 
@@ -22,10 +22,12 @@ class Agent:
             name: The agent's name (e.g., "Cosmic Horror")
             model: The OpenRouter model ID (e.g., "mistralai/mistral-7b-instruct")
             system_prompt: The personality/instructions for this agent
+            temperature: Sampling temperature (0.0-2.0, default: 0.9)
         """
         self.name = name
         self.model = model
         self.system_prompt = system_prompt
+        self.temperature = temperature
 
         # Initialize OpenAI client pointing to OpenRouter
         self.client = OpenAI(
@@ -44,24 +46,40 @@ class Agent:
         Returns:
             The agent's response as a string
         """
-        # ULTRA-AGGRESSIVE SLIDING WINDOW: Only last 5 messages
-        # Just enough to understand recent context without bloat
-        recent_context = context[-5:] if len(context) > 5 else context
+        # PRESERVE ORIGINAL PROMPT: Always keep the first message (user's story prompt)
+        # Then apply sliding window to recent messages to maintain story context
+        # This ensures agents never lose track of what they're writing about
+        if len(context) > 0:
+            original_prompt = context[0]  # The user's initial request
+
+            # Take last 4 messages (not including original) to stay within token budget
+            # With 6 agents per round, this gives us most of the previous round
+            if len(context) > 5:
+                recent_messages = context[-4:]
+            else:
+                recent_messages = context[1:]  # Everything except the original prompt
+
+            # Combine: original prompt + recent conversation
+            # Filter out duplicate if original_prompt somehow appears in recent_messages
+            recent_context = [original_prompt] + [msg for msg in recent_messages if msg.get("content") != original_prompt.get("content")]
+        else:
+            recent_context = context
 
         # ULTRA-AGGRESSIVE TRUNCATION: Limit each message to 200 chars
-        # Models keep echoing context, so we MUST keep it minimal
+        # BUT: Don't truncate the original user prompt (keep it intact so context is clear)
         safe_context = []
-        for msg in recent_context:
+        for i, msg in enumerate(recent_context):
             content = msg.get("content", "")
-            if len(content) > 200:
+            # Keep first message (user prompt) intact, truncate the rest
+            if i > 0 and len(content) > 200:
                 # Keep only the end for story flow
                 content = "..." + content[-200:]
             safe_context.append({"role": msg["role"], "content": content})
 
-        # Build the full message list
-        # FIX: Move system prompt to User role for compatibility
+        # Build the full message list with proper system role for personality
+        # System messages have higher priority and clearer separation from conversation
         messages = [
-            {"role": "user", "content": f"SYSTEM INSTRUCTIONS:\n{self.system_prompt}\n\n(End of instructions)"}
+            {"role": "system", "content": self.system_prompt}
         ] + safe_context
 
         max_retries = 3
@@ -79,7 +97,7 @@ class Agent:
                     max_tokens=80,       # ULTRA-STRICT: One sentence only (~50 words = ~65 tokens)
                     presence_penalty=1.2, # MAXIMUM: Strongly discourage any repetition
                     frequency_penalty=1.0, # ANTI-ECHO: Penalize repeated tokens
-                    temperature=0.9,      # High creativity to avoid formulaic responses
+                    temperature=self.temperature,  # Configurable creativity level
                 )
 
                 raw_response = response.choices[0].message.content.strip()

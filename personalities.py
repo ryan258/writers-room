@@ -17,11 +17,6 @@ MARKETING_EXEC = """OUTPUT ONLY YOUR NEW SENTENCE. Do not repeat what others wro
 
 
 # Model recommendations (can be changed based on availability/cost)
-# Model recommendations (can be changed based on availability/cost)
-# Model recommendations (can be changed based on availability/cost)
-# Model recommendations (can be changed based on availability/cost)
-# Model recommendations (can be changed based on availability/cost)
-# Model recommendations (can be changed based on availability/cost)
 RECOMMENDED_MODELS = {
     "rod_serling": "mistralai/ministral-3b-2512",
     "stephen_king": "mistralai/ministral-3b-2512",

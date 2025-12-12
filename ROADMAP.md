@@ -48,21 +48,21 @@
 - [x] Format saved transcripts nicely
 
 ### 2.2 Configurable Rounds
-- [ ] Let user choose number of rounds
-- [ ] Add option to continue after rounds complete
-- [ ] Add "interrupt" command to stop mid-session
+- [x] Let user choose number of rounds
+- [x] Add option to continue after rounds complete
+- [ ] Add "interrupt" command to stop mid-session (Ctrl+C works)
 
 ### 2.3 Error Handling
-- [ ] Handle API failures gracefully (better retries)
-- [ ] Validate OpenRouter API key on startup
-- [ ] Handle malformed responses
+- [x] Handle API failures gracefully (retries in Agent class)
+- [x] Validate OpenRouter API key on startup
+- [x] Better error messages
 
 ### 2.4 Agent Improvements
-- [ ] Add temperature/creativity controls per agent
-- [ ] Allow swapping models via command-line args
-- [ ] Add max token limits per response (keep it snappy)
+- [x] Add temperature/creativity controls per agent
+- [x] Allow swapping models via command-line args
+- [x] Max token limits already set (80 tokens per response)
 
-**Deliverable**: A more polished terminal experience with saved transcripts and better error handling.
+**Deliverable**: ✅ COMPLETE - Enhanced terminal experience with CLI args, validation, and better UX.
 
 ---
 
@@ -155,5 +155,5 @@
 
 ## Current Status
 
-**Phase**: Phase 1 Complete / Phase 2 Started
-**Next Step**: Implement configurable rounds and better error handling.
+**Phase**: Phase 2 Complete ✅
+**Next Step**: Choose Phase 3 (Producer Agent), Phase 4 (Audio/TTS), or Phase 5 (Web UI)

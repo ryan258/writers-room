@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Phase 2.0] - 2024-12-12
+
+### Added - Enhanced Experience
+- **Configurable Rounds**: User prompt or CLI arg (`-r/--rounds`) to set number of rounds
+- **Continue Option**: After rounds complete, option to continue with more rounds
+  - Can specify exact number (e.g., "3") or use y/n
+  - Disable with `--no-continue` flag
+- **API Key Validation**: Tests API key on startup
+  - Validates format (must start with `sk-or-`)
+  - Makes test API call to verify key works
+  - Detects invalid keys, rate limits, expired keys
+  - Skip with `--skip-validation` for faster startup
+- **Model Override**: CLI arg (`-m/--model`) to use custom model for all agents
+- **Temperature Control**: CLI arg (`-t/--temperature`) to adjust creativity (0.0-2.0)
+- **Help Text**: `--help` shows all available options
+
+### Changed
+- Agent class now accepts `temperature` parameter
+- Better error messages throughout
+- Main function now uses argparse for CLI arguments
+
 ## [Phase 1.4] - 2024-12-12
 
 ### Fixed - CRITICAL: Echo Problem (Fix V2)
