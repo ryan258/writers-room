@@ -6,7 +6,7 @@ env/
 __pycache__/
 
 # Transcripts (optional - uncomment if you don't want to commit them)
-# transcripts/
+transcripts/
 
 # IDE
 .vscode/

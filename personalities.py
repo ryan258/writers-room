@@ -29,11 +29,16 @@ You interrupt conversations to suggest how RIP Tequila can be featured. You use 
 
 
 # Model recommendations (can be changed based on availability/cost)
+# Model recommendations (can be changed based on availability/cost)
+# Model recommendations (can be changed based on availability/cost)
+# Model recommendations (can be changed based on availability/cost)
+# Model recommendations (can be changed based on availability/cost)
+# Model recommendations (can be changed based on availability/cost)
 RECOMMENDED_MODELS = {
-    "rod_serling": "moonshotai/kimi-k2:free",
-    "stephen_king": "moonshotai/kimi-k2:free",
-    "hp_lovecraft": "moonshotai/kimi-k2:free",
-    "jorge_borges": "moonshotai/kimi-k2:free",
-    "robert_stack": "moonshotai/kimi-k2:free",
-    "marketing": "moonshotai/kimi-k2:free",
+    "rod_serling": "nvidia/nemotron-nano-12b-v2-vl:free",
+    "stephen_king": "nvidia/nemotron-nano-12b-v2-vl:free",
+    "hp_lovecraft": "nvidia/nemotron-nano-12b-v2-vl:free",
+    "jorge_borges": "nvidia/nemotron-nano-12b-v2-vl:free",
+    "robert_stack": "nvidia/nemotron-nano-12b-v2-vl:free",
+    "marketing": "nvidia/nemotron-nano-12b-v2-vl:free",
 }

@@ -4,6 +4,7 @@ Each agent has a unique personality defined by its system prompt.
 """
 
 import os
+import time
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -43,25 +44,42 @@ class Agent:
         Returns:
             The agent's response as a string
         """
-        # Build the full message list with system prompt first
+        # Build the full message list
+        # FIX: Move system prompt to User role AND remove max_tokens for Nemotron compatibility
         messages = [
-            {"role": "system", "content": self.system_prompt}
+            {"role": "user", "content": f"SYSTEM INSTRUCTIONS:\n{self.system_prompt}\n\n(End of instructions)"}
         ] + context
 
-        try:
-            # Call OpenRouter API
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                extra_headers={
-                    "HTTP-Referer": os.getenv("YOUR_SITE_URL", "http://localhost"),
-                    "X-Title": os.getenv("YOUR_SITE_NAME", "AgentSwarmLocal"),
-                },
-                max_tokens=300,  # Keep responses concise
-                temperature=0.8,  # Add some creativity
-            )
+        max_retries = 3
+        
+        for attempt in range(max_retries):
+            try:
+                # Call OpenRouter API
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    extra_headers={
+                        "HTTP-Referer": os.getenv("YOUR_SITE_URL", "http://localhost"),
+                        "X-Title": "YOUR_SITE_NAME",
+                    },
+                    # max_tokens=300,  # REMOVED: Causes empty response with Nemotron 12B
+                    temperature=0.8,  # Add some creativity
+                )
 
-            return response.choices[0].message.content.strip()
+                return response.choices[0].message.content.strip()
 
-        except Exception as e:
-            return f"[ERROR: {self.name} failed to respond - {str(e)}]"
+            except Exception as e:
+                error_str = str(e)
+                # Check for rate limit or other transient errors
+                if "429" in error_str or "Rate limit" in error_str:
+                    if attempt < max_retries - 1:
+                        sleep_time = 5 * (2 ** attempt)  # Exponential backoff: 5, 10, 20 seconds
+                        print(f"    [Adjusting frequency for {self.name}... waiting {sleep_time}s]")
+                        time.sleep(sleep_time)
+                        continue
+                
+                # If we're out of retries or it's a different error, return the error message
+                if attempt == max_retries - 1:
+                    return f"[ERROR: {self.name} failed to respond - {error_str}]"
+        
+        return f"[ERROR: {self.name} failed to respond]"

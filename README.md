@@ -56,7 +56,7 @@ YOUR_SITE_NAME=AgentSwarmLocal
 
 Recommended Model Mapping (Free/Cheap Tier):
 
-All agents are currently configured to use `moonshotai/kimi-k2:free`, but this can be changed in `personalities.py`.
+All agents are currently configured to use `nvidia/nemotron-nano-12b-v2-vl:free` (a visual-language model), but this can be changed in `personalities.py`.
 
 4. The Agents (System Prompts)
 
@@ -101,18 +101,38 @@ Rounds: The cycle repeats for 3 rounds.
 Key Feature - The "Context Window":
 Pass the previous turns to the current agent so they can "react" to each other.
 
-6. Implementation Spec for AI Coding Assistant
+6. Quick Start (Activation & Running)
 
-Prompt to give Claude/Cursor:
+Follow these steps to get the writers room running:
 
-"I want to build a Python script that uses the OpenRouter API. I need a class called Agent that takes a name, model_string, and system_prompt.
+1.  **Set up the environment:**
+    ```bash
+    # Create virtual environment
+    python3 -m venv venv
+    
+    # Activate it (Mac/Linux)
+    source venv/bin/activate
+    # OR Windows: venv\Scripts\activate
+    
+    # Install dependencies
+    pip install -r requirements.txt
+    ```
 
-I need a main.py that initializes six specific agents (Serling, King, Lovecraft, Borges, Stack, Marketing) using the prompts defined in personalities.py.
+2.  **Configure API Key:**
+    ```bash
+    cp .env.example .env
+    # Edit .env and paste your OpenRouter API Key
+    ```
 
-The script should ask the user for a starting scenario. Then, it should loop 3 times. In each loop, every agent gets a chance to add 2-4 sentences to the story OR critique the previous writer.
+3.  **Run the Simulation:**
+    ```bash
+    python main.py
+    ```
 
-Use the openai python library but point the base_url to https://openrouter.ai/api/v1.
-Ensure the output is color-coded in the terminal."
+4.  **Deactivate when done:**
+    ```bash
+    deactivate
+    ```
 
 7. Future Expansions
 
