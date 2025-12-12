@@ -20,6 +20,7 @@ from personalities import (
     JORGE_BORGES,
     ROBERT_STACK,
     MARKETING_EXEC,
+    PRODUCER,
     RECOMMENDED_MODELS
 )
 
@@ -136,6 +137,69 @@ def validate_api_key():
             return False, f"Validation failed: {error_str[:150]}"
 
 
+def parse_producer_scores(producer_response: str, agent_names: list) -> dict:
+    """
+    Parse scores from Producer's response.
+
+    Expected format: "Agent Name: X/10 - comment"
+
+    Args:
+        producer_response: The Producer's evaluation text
+        agent_names: List of agent names to look for
+
+    Returns:
+        Dictionary mapping agent names to scores (1-10)
+    """
+    import re
+    scores = {}
+
+    for agent_name in agent_names:
+        # Look for patterns like "Agent Name: 7/10" or "Agent Name: 7 / 10"
+        pattern = rf"{re.escape(agent_name)}:\s*(\d+)\s*/\s*10"
+        match = re.search(pattern, producer_response, re.IGNORECASE)
+
+        if match:
+            score = int(match.group(1))
+            # Clamp score between 1-10
+            scores[agent_name] = max(1, min(10, score))
+
+    return scores
+
+
+def display_leaderboard(agent_scores: dict, round_num: int = None):
+    """
+    Display the current leaderboard with agent scores.
+
+    Args:
+        agent_scores: Dictionary mapping agent names to list of scores
+        round_num: Current round number (optional)
+    """
+    print(f"\n{Fore.GREEN}{'='*60}")
+    if round_num:
+        print(f"{Fore.GREEN}  📊 LEADERBOARD - After Round {round_num}")
+    else:
+        print(f"{Fore.GREEN}  📊 FINAL LEADERBOARD")
+    print(f"{Fore.GREEN}{'='*60}\n")
+
+    # Calculate averages and sort
+    agent_averages = []
+    for agent_name, scores in agent_scores.items():
+        if scores:
+            avg_score = sum(scores) / len(scores)
+            agent_averages.append((agent_name, avg_score, scores))
+
+    # Sort by average score (descending)
+    agent_averages.sort(key=lambda x: x[1], reverse=True)
+
+    # Display rankings
+    for rank, (agent_name, avg_score, scores) in enumerate(agent_averages, 1):
+        medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"{rank}."
+        score_history = ", ".join(str(s) for s in scores)
+        print(f"{Fore.GREEN}{medal} {agent_name}: {avg_score:.1f}/10 avg ({score_history})")
+
+    print(f"{Fore.GREEN}{'='*60}\n")
+
+
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -169,6 +233,16 @@ def parse_args():
         type=float,
         default=None,
         help="Override temperature for all agents (0.0-2.0, default: 0.9)"
+    )
+    parser.add_argument(
+        "--no-producer",
+        action="store_true",
+        help="Disable The Producer agent (Phase 3 feature)"
+    )
+    parser.add_argument(
+        "--fire-worst",
+        action="store_true",
+        help="Producer fires the worst performer at the end (requires Producer)"
     )
     return parser.parse_args()
 
@@ -248,6 +322,18 @@ def main():
         temperature=temperature
     )
 
+    # Phase 3: The Producer Agent (unless disabled)
+    producer_enabled = not args.no_producer
+    agent_producer = None
+    if producer_enabled:
+        agent_producer = Agent(
+            name="The Producer",
+            model=model_override or RECOMMENDED_MODELS["producer"],
+            system_prompt=PRODUCER,
+            temperature=0.7,  # Lower temperature for more consistent judging
+            max_tokens=300     # Producer needs more tokens to evaluate all 6 agents
+        )
+
     agents = [
         (agent_serling, Fore.CYAN, "Rod Serling"),
         (agent_king, Fore.RED, "Stephen King"),
@@ -257,12 +343,24 @@ def main():
         (agent_rip, Fore.YELLOW, "RIP Tequila Bot")
     ]
 
+    # Initialize scoring system (Phase 3)
+    agent_scores = {
+        "Rod Serling": [],
+        "Stephen King": [],
+        "H.P. Lovecraft": [],
+        "Jorge Luis Borges": [],
+        "Robert Stack": [],
+        "RIP Tequila Bot": []
+    }
+
     print(f"{Fore.CYAN}✓ Rod Serling (Twilight Zone)")
     print(f"{Fore.RED}✓ Stephen King (Character Horror)")
     print(f"{Fore.MAGENTA}✓ H.P. Lovecraft (Cosmic Horror)")
     print(f"{Fore.BLUE}✓ Jorge Luis Borges (Philosophical Fiction)")
     print(f"{Fore.WHITE}✓ Robert Stack (Unsolved Mysteries)")
     print(f"{Fore.YELLOW}✓ RIP Tequila Bot (Marketing Executive)")
+    if producer_enabled:
+        print(f"{Fore.GREEN}✓ The Producer (Snarky Judge) [Phase 3]")
 
     if model_override:
         print(f"\n{Fore.YELLOW}📌 Using custom model: {model_override}")
@@ -322,6 +420,36 @@ def main():
                 "name": display_name
             })
 
+        # Phase 3: Producer evaluation after each round
+        if producer_enabled and agent_producer:
+            print(f"\n{Fore.GREEN}{'─'*60}")
+            print(f"{Fore.GREEN}  🎬 THE PRODUCER'S VERDICT")
+            print(f"{Fore.GREEN}{'─'*60}\n")
+
+            # Producer reviews the round
+            # Build a special context showing just this round's contributions
+            round_context = [
+                {"role": "user", "content": f"Review this round's contributions to the story: {user_prompt}"}
+            ]
+            # Add last 6 messages (the current round)
+            round_context.extend(conversation_history[-6:])
+
+            producer_response = agent_producer.generate_response(round_context)
+            print_agent_response("The Producer", producer_response, Fore.GREEN)
+
+            # Parse scores from Producer's response
+            agent_names = [name for _, _, name in agents]
+            round_scores = parse_producer_scores(producer_response, agent_names)
+
+            # Update score tracking
+            for agent_name, score in round_scores.items():
+                if agent_name in agent_scores:
+                    agent_scores[agent_name].append(score)
+
+            # Display leaderboard if we got scores
+            if round_scores:
+                display_leaderboard(agent_scores, round_num)
+
     # Initial rounds complete
     print(f"\n{Fore.CYAN}{'='*60}")
     print(f"{Fore.CYAN}  ROUNDS COMPLETE")
@@ -367,10 +495,67 @@ def main():
                         "name": display_name
                     })
 
+                # Phase 3: Producer evaluation after each round
+                if producer_enabled and agent_producer:
+                    print(f"\n{Fore.GREEN}{'─'*60}")
+                    print(f"{Fore.GREEN}  🎬 THE PRODUCER'S VERDICT")
+                    print(f"{Fore.GREEN}{'─'*60}\n")
+
+                    # Producer reviews the round
+                    round_context = [
+                        {"role": "user", "content": f"Review this round's contributions to the story: {user_prompt}"}
+                    ]
+                    round_context.extend(conversation_history[-6:])
+
+                    producer_response = agent_producer.generate_response(round_context)
+                    print_agent_response("The Producer", producer_response, Fore.GREEN)
+
+                    # Parse scores and update tracking
+                    agent_names = [name for _, _, name in agents]
+                    round_scores = parse_producer_scores(producer_response, agent_names)
+
+                    for agent_name, score in round_scores.items():
+                        if agent_name in agent_scores:
+                            agent_scores[agent_name].append(score)
+
+                    # Display leaderboard
+                    if round_scores:
+                        display_leaderboard(agent_scores, round_num)
+
             rounds += additional_rounds
             print(f"\n{Fore.CYAN}{'='*60}")
             print(f"{Fore.CYAN}  ROUNDS COMPLETE (Total: {rounds})")
             print(f"{Fore.CYAN}{'='*60}\n")
+
+    # Phase 3: Final results and winner declaration
+    if producer_enabled and agent_producer:
+        # Calculate final averages
+        agent_averages = []
+        for agent_name, scores in agent_scores.items():
+            if scores:
+                avg_score = sum(scores) / len(scores)
+                agent_averages.append((agent_name, avg_score, scores))
+
+        if agent_averages:
+            # Sort by average score
+            agent_averages.sort(key=lambda x: x[1], reverse=True)
+
+            # Display final leaderboard
+            display_leaderboard(agent_scores)
+
+            # Declare winner
+            winner_name, winner_score, _ = agent_averages[0]
+            print(f"{Fore.GREEN}🏆 {'='*60}")
+            print(f"{Fore.GREEN}   WINNER: {winner_name} with {winner_score:.1f}/10 average!")
+            print(f"{Fore.GREEN}{'='*60}\n")
+
+            # Optional: Fire worst performer
+            if args.fire_worst and len(agent_averages) > 1:
+                worst_name, worst_score, _ = agent_averages[-1]
+                print(f"{Fore.RED}🔥 {'='*60}")
+                print(f"{Fore.RED}   {worst_name} has been FIRED!")
+                print(f"{Fore.RED}   (Lowest score: {worst_score:.1f}/10)")
+                print(f"{Fore.RED}{'='*60}\n")
 
     # Save transcript
     save_transcript(user_prompt, conversation_history)

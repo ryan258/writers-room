@@ -71,18 +71,19 @@
 **Goal**: Add a judge to the chaos
 
 ### 3.1 Producer Agent
-- [ ] Create seventh agent: "The Producer"
-- [ ] System prompt: Judges which writer is "winning"
-- [ ] Runs after each round or at the end
-- [ ] Provides snarky commentary on each agent's contribution
+- [x] Create seventh agent: "The Producer"
+- [x] System prompt: Judges which writer is "winning"
+- [x] Runs after each round
+- [x] Provides snarky commentary on each agent's contribution
 
-### 3.2 Scoring System (Optional)
-- [ ] Producer rates each contribution (1-10)
-- [ ] Track scores across rounds
-- [ ] Declare a "winner" at the end
-- [ ] Producer can "fire" the worst performer
+### 3.2 Scoring System
+- [x] Producer rates each contribution (1-10)
+- [x] Track scores across rounds
+- [x] Display leaderboard after each round
+- [x] Declare a "winner" at the end
+- [x] Producer can "fire" the worst performer (--fire-worst flag)
 
-**Deliverable**: A meta-agent that provides commentary and judges the others.
+**Deliverable**: ✅ COMPLETE - A meta-agent that provides commentary and judges the others.
 
 ---
 
@@ -155,5 +156,5 @@
 
 ## Current Status
 
-**Phase**: Phase 2 Complete ✅
-**Next Step**: Choose Phase 3 (Producer Agent), Phase 4 (Audio/TTS), or Phase 5 (Web UI)
+**Phase**: Phase 3 Complete ✅
+**Next Step**: Choose Phase 4 (Audio/TTS) or Phase 5 (Web UI)

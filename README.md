@@ -139,7 +139,7 @@ Follow these steps to get the writers room running:
     deactivate
     ```
 
-## Phase 2 Features (New!)
+## Phase 2 Features
 
 - **Configurable Rounds**: Choose how many rounds to run
 - **Continue Option**: Keep going after rounds complete
@@ -150,10 +150,23 @@ Follow these steps to get the writers room running:
 
 See `PHASE2_COMPLETE.md` for full documentation.
 
+## Phase 3 Features (New! 🎬)
+
+- **The Producer**: A snarky Hollywood executive judges all writers after each round
+- **Scoring System**: Each writer receives 1-10 scores with commentary
+- **Live Leaderboards**: See rankings with medals (🥇🥈🥉) after every round
+- **Winner Declaration**: Final leaderboard and winner announcement
+- **Fire Worst Performer**: Optional `--fire-worst` flag to terminate the lowest scorer
+- **Disable Producer**: Use `--no-producer` to run without judging
+
+See `PHASE3_COMPLETE.md` for full documentation.
+
 7. Future Expansions
 
-The "Producer" Agent: An LLM that judges who "won" the argument and fires one of the writers.
+TTS Integration: Pipe the output to ElevenLabs or OpenAI TTS to hear them argue in character (Phase 4).
 
-TTS Integration: Pipe the output to ElevenLabs or OpenAI TTS to hear them argue in character.
+Web Interface: A dark-themed web UI with agent cards and live leaderboards (Phase 5).
 
-Web Interface: A simple Streamlit app to visualize the chat bubbles.
+Custom Agents: Let users create their own agent personalities and story modes (Phase 6).
+
+See `ROADMAP.md` for the full development plan.

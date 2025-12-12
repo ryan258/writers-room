@@ -14,7 +14,7 @@ load_dotenv()
 class Agent:
     """An AI agent with a specific personality and model."""
 
-    def __init__(self, name: str, model: str, system_prompt: str, temperature: float = 0.9):
+    def __init__(self, name: str, model: str, system_prompt: str, temperature: float = 0.9, max_tokens: int = 80):
         """
         Initialize an AI agent.
 
@@ -23,11 +23,13 @@ class Agent:
             model: The OpenRouter model ID (e.g., "mistralai/mistral-7b-instruct")
             system_prompt: The personality/instructions for this agent
             temperature: Sampling temperature (0.0-2.0, default: 0.9)
+            max_tokens: Maximum tokens per response (default: 80 for one sentence)
         """
         self.name = name
         self.model = model
         self.system_prompt = system_prompt
         self.temperature = temperature
+        self.max_tokens = max_tokens
 
         # Initialize OpenAI client pointing to OpenRouter
         self.client = OpenAI(
@@ -94,7 +96,7 @@ class Agent:
                         "HTTP-Referer": os.getenv("YOUR_SITE_URL", "http://localhost"),
                         "X-Title": "YOUR_SITE_NAME",
                     },
-                    max_tokens=80,       # ULTRA-STRICT: One sentence only (~50 words = ~65 tokens)
+                    max_tokens=self.max_tokens,  # Configurable token limit (80 for writers, 300 for Producer)
                     presence_penalty=1.2, # MAXIMUM: Strongly discourage any repetition
                     frequency_penalty=1.0, # ANTI-ECHO: Penalize repeated tokens
                     temperature=self.temperature,  # Configurable creativity level

@@ -2,6 +2,60 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Phase 3.0] - 2024-12-12
+
+### Added - The Producer Agent
+- **The Producer**: Seventh AI agent that judges all writers after each round
+  - Snarky Hollywood executive personality
+  - Provides commentary and scores (1-10) for each writer
+  - Uses 300 max_tokens vs. 80 for regular writers
+  - Lower temperature (0.7) for consistent judging
+- **Scoring System**: Tracks performance across all rounds
+  - Parses scores from Producer's responses using regex
+  - Stores scores per agent in dictionary
+  - Calculates averages automatically
+- **Leaderboard Display**: Shows rankings after each round
+  - Medals for top 3 (🥇🥈🥉)
+  - Average scores and score history
+  - Color-coded in green
+- **Winner Declaration**: Final results at end of session
+  - Final leaderboard display
+  - Winner announcement with fanfare
+- **Fire Worst Performer**: Optional dramatic ending
+  - `--fire-worst` CLI flag
+  - Terminates lowest-scoring writer
+  - Red-colored "FIRED" message
+- **CLI Flags**:
+  - `--no-producer`: Disable Producer for Phase 2 behavior
+  - `--fire-worst`: Fire the worst performer at end
+- **Agent Class Enhancement**: Added `max_tokens` parameter
+  - Default 80 for writers (one sentence)
+  - 300 for Producer (needs to evaluate 6 agents)
+
+### Added - Documentation
+- `PHASE3_COMPLETE.md`: Full Phase 3 feature documentation
+- Updated `README.md` with Phase 3 features
+- Updated `ROADMAP.md` to mark Phase 3 complete
+
+### Fixed - Critical Bugs
+- **Context Window**: Now preserves original user prompt across all rounds
+  - Previous bug: After round 1 (6 agent responses), the sliding window of 5 messages would drop the original prompt
+  - Fix: Always keep first message (user prompt) + last 4 messages
+  - Impact: Agents no longer drift off-topic in later rounds
+- **System Role**: Moved personality instructions from user role to system role
+  - Previous bug: Personality sent as user message, creating two consecutive user messages
+  - Fix: Use proper system role for personality instructions
+  - Impact: Better model compliance with personality constraints
+- **API Validation**: Improved error handling
+  - Previous bug: Network errors returned "valid" and failed later
+  - Fix: Detect and report specific error types (timeout, 404, network)
+  - Impact: Clearer error messages during startup
+- **Documentation**: Fixed inaccuracies in README
+  - Removed references to non-existent `web/` folder
+  - Corrected model name (mistralai/ministral-3b-2512)
+  - Fixed agent count (6 writers, not 5)
+- **Code Cleanup**: Removed duplicate comment lines in `personalities.py`
+
 ## [Phase 2.0] - 2024-12-12
 
 ### Added - Enhanced Experience
