@@ -44,11 +44,25 @@ class Agent:
         Returns:
             The agent's response as a string
         """
+        # ULTRA-AGGRESSIVE SLIDING WINDOW: Only last 5 messages
+        # Just enough to understand recent context without bloat
+        recent_context = context[-5:] if len(context) > 5 else context
+
+        # ULTRA-AGGRESSIVE TRUNCATION: Limit each message to 200 chars
+        # Models keep echoing context, so we MUST keep it minimal
+        safe_context = []
+        for msg in recent_context:
+            content = msg.get("content", "")
+            if len(content) > 200:
+                # Keep only the end for story flow
+                content = "..." + content[-200:]
+            safe_context.append({"role": msg["role"], "content": content})
+
         # Build the full message list
-        # FIX: Move system prompt to User role AND remove max_tokens for Nemotron compatibility
+        # FIX: Move system prompt to User role for compatibility
         messages = [
             {"role": "user", "content": f"SYSTEM INSTRUCTIONS:\n{self.system_prompt}\n\n(End of instructions)"}
-        ] + context
+        ] + safe_context
 
         max_retries = 3
         
@@ -62,11 +76,27 @@ class Agent:
                         "HTTP-Referer": os.getenv("YOUR_SITE_URL", "http://localhost"),
                         "X-Title": "YOUR_SITE_NAME",
                     },
-                    # max_tokens=300,  # REMOVED: Causes empty response with Nemotron 12B
-                    temperature=0.8,  # Add some creativity
+                    max_tokens=80,       # ULTRA-STRICT: One sentence only (~50 words = ~65 tokens)
+                    presence_penalty=1.2, # MAXIMUM: Strongly discourage any repetition
+                    frequency_penalty=1.0, # ANTI-ECHO: Penalize repeated tokens
+                    temperature=0.9,      # High creativity to avoid formulaic responses
                 )
 
-                return response.choices[0].message.content.strip()
+                raw_response = response.choices[0].message.content.strip()
+
+                # POST-PROCESSING: Remove any echoed context
+                # If the response starts with "..." it's likely echoing truncated context
+                if raw_response.startswith("..."):
+                    # Find the last occurrence of a sentence-ending pattern
+                    # Then return everything after it
+                    import re
+                    # Look for the last complete sentence boundary after ellipsis
+                    sentences = re.split(r'(?<=[.!?])\s+', raw_response)
+                    if len(sentences) > 1:
+                        # Return only the last sentence (the new content)
+                        return sentences[-1]
+
+                return raw_response
 
             except Exception as e:
                 error_str = str(e)

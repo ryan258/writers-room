@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Phase 1.4] - 2024-12-12
+
+### Fixed - CRITICAL: Echo Problem (Fix V2)
+- **The Problem**: V1.3 didn't work - models were echoing context instead of adding new sentences
+- **New approach**: Nuclear option to eliminate echoing
+  - **System prompts**: Now lead with "OUTPUT ONLY YOUR NEW SENTENCE. Do not repeat..."
+  - **Context window**: Reduced to 5 messages (down from 8)
+  - **Message truncation**: Reduced to 200 chars (down from 400)
+  - **max_tokens**: Reduced to 80 (down from 120)
+  - **presence_penalty**: Increased to 1.2 (up from 0.6) - maximum strength
+  - **frequency_penalty**: Added at 1.0 to penalize repeated tokens
+  - **Post-processing**: Added echo detection and removal
+- **Expected result**: ~6,300 tokens/session (vs. original 156k = 96% reduction)
+
+## [Phase 1.3] - 2024-12-11
+
+### Fixed - Token Optimization (V1 - DIDN'T WORK)
+- Attempted to reduce tokens but models still echoed context
+- See Phase 1.4 for actual fix
+
+### Changed
+- All personality prompts now ultra-concise for token efficiency
+- Switched model from `nvidia/nemotron` to `mistralai/ministral-3b-2512`
+
 ## [Phase 1.2] - 2024-12-11
 
 ### Changed

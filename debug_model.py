@@ -9,9 +9,9 @@ client = OpenAI(
     api_key=os.getenv("OPENROUTER_API_KEY"),
 )
 
-model = "nvidia/nemotron-nano-12b-v2-vl:free"
+
+model = "mistralai/ministral-3b-2512"
 context = [
-    # {"role": "system", "content": "You are Rod Serling. You write introductions for The Twilight Zone."},
     {"role": "user", "content": "SYSTEM INSTRUCTION: You are Rod Serling. You write introductions for The Twilight Zone.\n\nUSER PROMPT: Write an intro about a man who finds a shoe."}
 ]
 
@@ -26,8 +26,10 @@ try:
             "HTTP-Referer": "http://localhost",
             "X-Title": "DebugScript",
         },
-        # max_tokens=300, # Removed to see if this is the issue
-        temperature=0.1,
+        max_tokens=80,   # Ultra-strict: one sentence only
+        presence_penalty=1.2,  # Maximum anti-repetition
+        frequency_penalty=1.0, # Penalize echoing
+        temperature=0.9,
     )
 
     print("\n--- RAW RESPONSE ---")
