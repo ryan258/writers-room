@@ -15,8 +15,8 @@ print("="*60)
 # Test 1: Verify PRODUCER and max_tokens work
 print("\n1. Testing PRODUCER import and Agent max_tokens parameter...")
 try:
-    from personalities import PRODUCER, RECOMMENDED_MODELS
-    from agents import Agent
+    from lib.personalities import PRODUCER, RECOMMENDED_MODELS
+    from lib.agents import Agent
 
     producer = Agent(
         name="The Producer",
@@ -36,10 +36,11 @@ except Exception as e:
 # Test 2: Model selection logic
 print("\n2. Testing model selection logic (no override)...")
 try:
-    from personalities import (
+    from lib.personalities import (
         ROD_SERLING, STEPHEN_KING, HP_LOVECRAFT,
         JORGE_BORGES, ROBERT_STACK, MARKETING_EXEC
     )
+    from lib.agents import Agent
 
     # Simulate initialize_agents with NO model override
     config = {
@@ -140,12 +141,13 @@ try:
         })
 
     # Verify agents.py logic preserves prompt
-    # (Copied from agents.py lines 51-68)
+    # (Mirrors lib/agents.py sliding window behavior)
     if len(conversation_history) > 0:
         original_prompt = conversation_history[0]
 
-        if len(conversation_history) > 5:
-            recent_messages = conversation_history[-4:]
+        window_size = 15
+        if len(conversation_history) > window_size + 1:
+            recent_messages = conversation_history[-window_size:]
         else:
             recent_messages = conversation_history[1:]
 
@@ -190,6 +192,31 @@ try:
 
 except Exception as e:
     print(f"   ✗ FAILED: {e}")
+    sys.exit(1)
+
+print("5b. Testing scores with aliases...")
+# Test specific alias case that was failing
+alias_response = """
+Evaluation:
+Rod: 7/10 - Good job.
+King: 8/10 - Scary.
+Lovecraft: 6/10 - Too wordy.
+Borges: 9/10 - Deep.
+Stack: 8/10 - Mysterious.
+Tequila Bot: 7/10 - Funny.
+"""
+agent_names = [
+    "Rod Serling", "Stephen King", "H.P. Lovecraft",
+    "Jorge Luis Borges", "Robert Stack", "RIP Tequila Bot"
+]
+
+from lib.session import parse_producer_scores
+scores = parse_producer_scores(alias_response, agent_names)
+
+if scores.get("RIP Tequila Bot") == 7 and scores.get("Rod Serling") == 7:
+    print("   ✓ Alias parsing verified (Tequila Bot -> RIP Tequila Bot)")
+else:
+    print(f"   ❌ Alias parsing failed: {scores}")
     sys.exit(1)
 
 # Test 6: eventlet removed from requirements

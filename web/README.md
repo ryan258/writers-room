@@ -23,8 +23,8 @@ YOUR_SITE_NAME=WritersRoomWeb
 ### 3. Start the Server
 
 ```bash
-# From the web directory
-python app.py
+# From project root
+uvicorn web.app:app --reload --port 5001
 ```
 
 ### 4. Open in Browser
@@ -49,14 +49,14 @@ Navigate to: **http://localhost:5001**
 
 ## Architecture
 
-- **Backend**: Flask + Socket.IO (WebSocket)
+- **Backend**: FastAPI + native WebSocket
 - **Frontend**: Vanilla HTML/CSS/JavaScript
-- **Real-Time**: Socket.IO for live updates
+- **Real-Time**: WebSocket for live updates
 - **Styling**: CSS custom properties, dark theme
 
 ## Files
 
-- `app.py` - Flask backend with WebSocket handlers
+- `web/app.py` - FastAPI backend with WebSocket handlers
 - `templates/index.html` - Main UI structure
 - `static/css/style.css` - Dark theme styling
 - `static/js/app.js` - Client-side WebSocket logic
@@ -64,7 +64,7 @@ Navigate to: **http://localhost:5001**
 ## Troubleshooting
 
 **Connection Failed?**
-- Make sure server is running: `python app.py`
+- Make sure server is running: `uvicorn web.app:app --reload --port 5001`
 - Check port 5001 is available
 - Verify firewall settings
 
@@ -81,11 +81,11 @@ See `../PHASE5_COMPLETE.md` for comprehensive documentation.
 
 **Run in Debug Mode:**
 ```bash
-FLASK_DEBUG=1 python app.py
+uvicorn web.app:app --reload --port 5001
 ```
 
 **Custom Port:**
-Edit `app.py` line: `socketio.run(app, host='0.0.0.0', port=5001, ...)`
+Pass a different `--port` to uvicorn.
 
 ---
 

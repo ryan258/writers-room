@@ -2,387 +2,594 @@
 
 let socket = null;
 let sessionActive = false;
+let audioQueue = [];
+let isPlayingAudio = false;
 
-// Initialize SocketIO connection
+// Initialize WebSocket connection
 function initSocket() {
-    socket = io();
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  const wsUrl = `${protocol}://${window.location.host}/ws`;
+  socket = new WebSocket(wsUrl);
 
-    socket.on('connect', () => {
-        console.log('Connected to server');
-    });
+  socket.addEventListener("open", () => {
+    console.log("Connected to server");
+  });
 
-    socket.on('connected', (data) => {
-        console.log('Server acknowledged connection:', data);
-    });
+  socket.addEventListener("message", (event) => {
+    try {
+      const message = JSON.parse(event.data);
+      if (message && message.event) {
+        handleEvent(message.event, message.data || {});
+      }
+    } catch (err) {
+      console.error("WebSocket message parse failed:", err);
+    }
+  });
 
-    socket.on('session_started', (data) => {
-        console.log('Session started:', data);
-        sessionActive = true;
-        updateStatusBanner(true, `Round 1 of ${data.rounds} starting...`);
+  socket.addEventListener("close", () => {
+    console.log("Disconnected from server");
+  });
 
-        // Show Producer card if enabled
-        if (data.config.producer_enabled) {
-            document.getElementById('agent-the-producer').classList.remove('hidden');
-        }
-    });
-
-    socket.on('round_started', (data) => {
-        console.log('Round started:', data);
-        updateStatusBanner(true, `Round ${data.round} of ${data.total}`);
-    });
-
-    socket.on('agent_thinking', (data) => {
-        console.log('Agent thinking:', data.agent);
-        const agentId = normalizeAgentId(data.agent);
-        const card = document.getElementById(`agent-${agentId}`);
-        const status = document.getElementById(`status-${agentId}`);
-
-        if (card) {
-            card.classList.add('thinking');
-        }
-        if (status) {
-            status.innerHTML = '<span class="spinner"></span> Thinking...';
-        }
-    });
-
-    socket.on('agent_response', (data) => {
-        console.log('Agent response:', data.agent, data.response);
-        const agentId = normalizeAgentId(data.agent);
-        const card = document.getElementById(`agent-${agentId}`);
-        const status = document.getElementById(`status-${agentId}`);
-        const responsesDiv = document.getElementById(`responses-${agentId}`);
-
-        // Remove thinking state
-        if (card) {
-            card.classList.remove('thinking');
-        }
-
-        // Update status
-        if (status) {
-            status.textContent = `Round ${data.round}`;
-        }
-
-        // Add response
-        if (responsesDiv) {
-            // Clear placeholder on first response
-            const placeholder = responsesDiv.querySelector('p[style*="italic"]');
-            if (placeholder) {
-                responsesDiv.innerHTML = '';
-            }
-
-            const responseItem = document.createElement('div');
-            responseItem.className = 'response-item';
-            responseItem.style.borderLeftColor = data.color;
-
-            const roundLabel = document.createElement('div');
-            roundLabel.className = 'response-round';
-            roundLabel.textContent = `Round ${data.round}`;
-
-            const responseText = document.createElement('div');
-            responseText.className = 'response-text';
-            responseText.textContent = data.response;
-
-            responseItem.appendChild(roundLabel);
-            responseItem.appendChild(responseText);
-            responsesDiv.appendChild(responseItem);
-
-            // Scroll to bottom
-            responsesDiv.scrollTop = responsesDiv.scrollHeight;
-        }
-    });
-
-    socket.on('producer_thinking', (data) => {
-        console.log('Producer thinking...');
-        const card = document.getElementById('agent-the-producer');
-        const status = document.getElementById('status-the-producer');
-
-        if (card) {
-            card.classList.add('thinking');
-        }
-        if (status) {
-            status.innerHTML = '<span class="spinner"></span> Judging...';
-        }
-
-        updateStatusBanner(true, `The Producer is evaluating Round ${data.round}...`);
-    });
-
-    socket.on('producer_verdict', (data) => {
-        console.log('Producer verdict:', data);
-        const card = document.getElementById('agent-the-producer');
-        const status = document.getElementById('status-the-producer');
-        const responsesDiv = document.getElementById('responses-the-producer');
-
-        // Remove thinking state
-        if (card) {
-            card.classList.remove('thinking');
-        }
-
-        // Update status
-        if (status) {
-            status.textContent = `Round ${data.round}`;
-        }
-
-        // Add verdict
-        if (responsesDiv) {
-            // Clear placeholder on first response
-            const placeholder = responsesDiv.querySelector('p[style*="italic"]');
-            if (placeholder) {
-                responsesDiv.innerHTML = '';
-            }
-
-            const responseItem = document.createElement('div');
-            responseItem.className = 'response-item';
-            responseItem.style.borderLeftColor = '#00ff00';
-
-            const roundLabel = document.createElement('div');
-            roundLabel.className = 'response-round';
-            roundLabel.textContent = `Round ${data.round} Verdict`;
-
-            const responseText = document.createElement('div');
-            responseText.className = 'response-text';
-            responseText.textContent = data.response;
-
-            responseItem.appendChild(roundLabel);
-            responseItem.appendChild(responseText);
-            responsesDiv.appendChild(responseItem);
-
-            // Scroll to bottom
-            responsesDiv.scrollTop = responsesDiv.scrollHeight;
-        }
-
-        // Update leaderboard
-        updateLeaderboard(data.leaderboard);
-    });
-
-    socket.on('round_completed', (data) => {
-        console.log('Round completed:', data.round);
-    });
-
-    socket.on('session_completed', (data) => {
-        console.log('Session completed:', data);
-        sessionActive = false;
-        updateStatusBanner(false);
-
-        // Show final results
-        if (data.winner) {
-            showWinner(data.winner);
-        }
-
-        if (data.worst) {
-            showFired(data.worst);
-        }
-
-        // Re-enable start button
-        const startBtn = document.getElementById('start-btn');
-        startBtn.disabled = false;
-        startBtn.textContent = '🎬 Start Writers Room';
-    });
-
-    socket.on('error', (data) => {
-        console.error('Error:', data.message);
-        alert('Error: ' + data.message);
-        sessionActive = false;
-        updateStatusBanner(false);
-
-        const startBtn = document.getElementById('start-btn');
-        startBtn.disabled = false;
-        startBtn.textContent = '🎬 Start Writers Room';
-    });
-
-    socket.on('disconnect', () => {
-        console.log('Disconnected from server');
-    });
+  socket.addEventListener("error", (err) => {
+    console.error("WebSocket error:", err);
+  });
 }
 
+function handleEvent(eventName, data) {
+  switch (eventName) {
+    case "connected":
+      console.log("Server acknowledged connection:", data);
+      break;
+    case "session_started":
+      console.log("Session started:", data);
+      sessionActive = true;
+      updateStatusBanner(true, `Round 1 of ${data.rounds} starting...`);
+      document.getElementById("story-state-panel").classList.remove("hidden");
+      if (data.mode_info) {
+        document.getElementById("state-mode").textContent =
+          data.mode_info.name || data.mode;
+      }
+      if (data.config && data.config.producer_enabled) {
+        document.getElementById("agent-the-producer").classList.remove("hidden");
+      }
+      break;
+    case "story_state_update":
+      console.log("Story state update:", data);
+      updateStoryStatePanel(data.state);
+      break;
+    case "round_started":
+      console.log("Round started:", data);
+      updateStatusBanner(true, `Round ${data.round} of ${data.total}`);
+      break;
+    case "agent_thinking": {
+      console.log("Agent thinking:", data.agent);
+      const { card, status } = ensureAgentCard(data.agent, data.color);
+      if (card) {
+        card.classList.add("thinking");
+      }
+      if (status) {
+        status.innerHTML = '<span class="spinner"></span> Thinking...';
+      }
+      break;
+    }
+    case "agent_response": {
+      console.log("Agent response:", data.agent, data.response);
+      const { card, status, responsesDiv } = ensureAgentCard(
+        data.agent,
+        data.color,
+      );
+
+      if (card) {
+        card.classList.remove("thinking");
+      }
+      if (status) {
+        status.textContent = `Round ${data.round}`;
+      }
+      if (responsesDiv) {
+        const placeholder = responsesDiv.querySelector(".placeholder-text");
+        if (placeholder) {
+          responsesDiv.innerHTML = "";
+        }
+
+        const responseItem = document.createElement("div");
+        responseItem.className = "response-item";
+        responseItem.style.borderLeftColor = data.color;
+
+        const roundLabel = document.createElement("div");
+        roundLabel.className = "response-round";
+        roundLabel.textContent = `Round ${data.round}`;
+
+        const responseText = document.createElement("div");
+        responseText.className = "response-text";
+        responseText.textContent = data.response;
+
+        responseItem.appendChild(roundLabel);
+        responseItem.appendChild(responseText);
+        responsesDiv.appendChild(responseItem);
+        responsesDiv.scrollTop = responsesDiv.scrollHeight;
+      }
+
+      if (data.audio) {
+        queueAudio({ data: data.audio, mime: data.audio_mime });
+      }
+      break;
+    }
+    case "producer_thinking": {
+      console.log("Producer thinking...");
+      const card = document.getElementById("agent-the-producer");
+      const status = document.getElementById("status-the-producer");
+      if (card) {
+        card.classList.add("thinking");
+      }
+      if (status) {
+        status.innerHTML = '<span class="spinner"></span> Judging...';
+      }
+      updateStatusBanner(true, `The Producer is evaluating Round ${data.round}...`);
+      break;
+    }
+    case "producer_verdict": {
+      console.log("Producer verdict:", data);
+      const card = document.getElementById("agent-the-producer");
+      const status = document.getElementById("status-the-producer");
+      const responsesDiv = document.getElementById("responses-the-producer");
+
+      if (card) {
+        card.classList.remove("thinking");
+      }
+      if (status) {
+        status.textContent = `Round ${data.round}`;
+      }
+      if (responsesDiv) {
+        const placeholder = responsesDiv.querySelector(".placeholder-text");
+        if (placeholder) {
+          responsesDiv.innerHTML = "";
+        }
+
+        const responseItem = document.createElement("div");
+        responseItem.className = "response-item producer-response";
+
+        const roundLabel = document.createElement("div");
+        roundLabel.className = "response-round";
+        roundLabel.textContent = `Round ${data.round} Verdict`;
+
+        const responseText = document.createElement("div");
+        responseText.className = "response-text";
+        responseText.textContent = data.response;
+
+        responseItem.appendChild(roundLabel);
+        responseItem.appendChild(responseText);
+        responsesDiv.appendChild(responseItem);
+        responsesDiv.scrollTop = responsesDiv.scrollHeight;
+      }
+
+      updateLeaderboard(data.leaderboard);
+
+      if (data.audio) {
+        queueAudio({ data: data.audio, mime: data.audio_mime });
+      }
+      break;
+    }
+    case "round_completed":
+      console.log("Round completed:", data.round);
+      break;
+    case "session_completed": {
+      console.log("Session completed:", data);
+      sessionActive = false;
+      updateStatusBanner(false);
+
+      if (data.story_state) {
+        updateStoryStatePanel(data.story_state);
+      }
+      if (data.winner) {
+        showWinner(data.winner);
+      }
+      if (data.worst) {
+        showFired(data.worst);
+      }
+
+      const startBtn = document.getElementById("start-btn");
+      startBtn.disabled = false;
+      startBtn.textContent = "Start Writers Room";
+      break;
+    }
+    case "error": {
+      console.error("Error:", data.message);
+      alert("Error: " + data.message);
+      sessionActive = false;
+      updateStatusBanner(false);
+
+      const startBtn = document.getElementById("start-btn");
+      startBtn.disabled = false;
+      startBtn.textContent = "Start Writers Room";
+      break;
+    }
+    default:
+      console.log("Unhandled event:", eventName, data);
+  }
+}
 // Normalize agent name to valid ID
 function normalizeAgentId(agentName) {
-    return agentName.toLowerCase()
-        .replace(/\./g, '')
-        .replace(/\s+/g, '-');
+  return agentName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function ensureAgentCard(agentName, color) {
+  const agentId = normalizeAgentId(agentName);
+  let card = document.getElementById(`agent-${agentId}`);
+  if (card) {
+    return {
+      card,
+      status: document.getElementById(`status-${agentId}`),
+      responsesDiv: document.getElementById(`responses-${agentId}`),
+    };
+  }
+
+  const grid = document.getElementById("agent-grid");
+  card = document.createElement("div");
+  card.className = "agent-card custom-agent";
+  card.id = `agent-${agentId}`;
+
+  const header = document.createElement("div");
+  header.className = "agent-header";
+
+  const nameEl = document.createElement("div");
+  nameEl.className = "agent-name text-cyan";
+  nameEl.textContent = agentName;
+
+  const specialty = document.createElement("div");
+  specialty.className = "agent-specialty";
+  specialty.textContent = "Custom Agent";
+
+  const status = document.createElement("div");
+  status.className = "agent-status";
+  status.id = `status-${agentId}`;
+  status.textContent = "Waiting...";
+
+  header.appendChild(nameEl);
+  header.appendChild(specialty);
+  header.appendChild(status);
+
+  const responsesDiv = document.createElement("div");
+  responsesDiv.className = "agent-responses";
+  responsesDiv.id = `responses-${agentId}`;
+  responsesDiv.innerHTML = '<p class="placeholder-text">Waiting...</p>';
+
+  card.appendChild(header);
+  card.appendChild(responsesDiv);
+  if (grid) {
+    grid.appendChild(card);
+  }
+
+  if (color) {
+    card.style.borderColor = color;
+  }
+
+  return { card, status, responsesDiv };
 }
 
 // Update status banner
-function updateStatusBanner(active, message = '') {
-    const banner = document.getElementById('status-banner');
-    const detail = document.getElementById('status-detail');
+function updateStatusBanner(active, message = "") {
+  const banner = document.getElementById("status-banner");
+  const detail = document.getElementById("status-detail");
 
-    if (active) {
-        banner.classList.add('active');
-        if (message) {
-            detail.textContent = message;
-        }
-    } else {
-        banner.classList.remove('active');
+  if (active) {
+    banner.classList.add("active");
+    if (message) {
+      detail.textContent = message;
     }
+  } else {
+    banner.classList.remove("active");
+  }
+}
+
+// Update story state panel
+function updateStoryStatePanel(state) {
+  if (!state) return;
+
+  const panel = document.getElementById("story-state-panel");
+  panel.classList.remove("hidden");
+
+  // Update individual fields
+  document.getElementById("state-mode").textContent = state.mode
+    ? state.mode.toUpperCase()
+    : "-";
+
+  // Act names
+  const actNames = { 1: "SETUP", 2: "CONFRONTATION", 3: "RESOLUTION" };
+  document.getElementById("state-act").textContent =
+    actNames[state.current_act] || state.current_act;
+
+  // Tension
+  const tension = state.tension_level || 3;
+  document.getElementById("state-tension").textContent = `${tension}/10`;
+  document.getElementById("tension-fill").style.width = `${tension * 10}%`;
+
+  // Color the tension bar based on level
+  const tensionFill = document.getElementById("tension-fill");
+  if (tension <= 3) {
+    tensionFill.style.background = "var(--accent-green)";
+  } else if (tension <= 6) {
+    tensionFill.style.background = "var(--accent-amber)";
+  } else {
+    tensionFill.style.background = "var(--accent-red)";
+  }
+
+  document.getElementById("state-pacing").textContent =
+    state.pacing || "steady";
+  document.getElementById("state-words").textContent = state.word_count || 0;
+
+  // Story needs - would need to be calculated client-side or sent from server
+  // For now, just show a placeholder based on act
+  let needs = "Continue building momentum";
+  if (state.current_act === 1) {
+    needs = "Establish characters and conflict";
+  } else if (state.current_act === 2) {
+    needs = "Increase tension and complications";
+  } else if (state.current_act === 3) {
+    needs = "Build toward resolution";
+  }
+  document.getElementById("state-needs").textContent = needs;
 }
 
 // Update leaderboard
 function updateLeaderboard(leaderboard) {
-    const leaderboardDiv = document.getElementById('leaderboard');
-    const leaderboardList = document.getElementById('leaderboard-list');
+  const leaderboardDiv = document.getElementById("leaderboard");
+  const leaderboardList = document.getElementById("leaderboard-list");
 
-    if (!leaderboard || leaderboard.length === 0) {
-        leaderboardDiv.classList.add('hidden');
-        return;
-    }
+  if (!leaderboard || leaderboard.length === 0) {
+    leaderboardDiv.classList.add("hidden");
+    return;
+  }
 
-    leaderboardDiv.classList.remove('hidden');
-    leaderboardList.innerHTML = '';
+  leaderboardDiv.classList.remove("hidden");
+  leaderboardList.innerHTML = "";
 
-    const medals = ['🥇', '🥈', '🥉'];
+  const medals = ["1st", "2nd", "3rd"];
 
-    leaderboard.forEach((item, index) => {
-        const li = document.createElement('li');
-        li.className = 'leaderboard-item';
+  leaderboard.forEach((item, index) => {
+    const li = document.createElement("li");
+    li.className = "leaderboard-item";
 
-        const rank = document.createElement('span');
-        rank.className = 'leaderboard-rank';
-        rank.textContent = index < 3 ? medals[index] : `${index + 1}.`;
+    const rank = document.createElement("span");
+    rank.className = "leaderboard-rank";
+    rank.textContent = index < 3 ? medals[index] : `${index + 1}th`;
 
-        const name = document.createElement('span');
-        name.className = 'leaderboard-name';
-        name.textContent = item.name;
+    const name = document.createElement("span");
+    name.className = "leaderboard-name";
+    name.textContent = item.name;
 
-        const score = document.createElement('span');
-        score.className = 'leaderboard-score';
-        score.textContent = `${item.average}/10`;
+    const score = document.createElement("span");
+    score.className = "leaderboard-score";
+    score.textContent = `${item.average}/10`;
 
-        const history = document.createElement('span');
-        history.className = 'leaderboard-history';
-        history.textContent = `(${item.scores.join(', ')})`;
+    const history = document.createElement("span");
+    history.className = "leaderboard-history";
+    history.textContent = `(${item.scores.join(", ")})`;
 
-        li.appendChild(rank);
-        li.appendChild(name);
-        li.appendChild(score);
-        li.appendChild(history);
+    li.appendChild(rank);
+    li.appendChild(name);
+    li.appendChild(score);
+    li.appendChild(history);
 
-        leaderboardList.appendChild(li);
-    });
+    leaderboardList.appendChild(li);
+  });
 }
 
 // Show winner banner
 function showWinner(winner) {
-    const banner = document.getElementById('winner-banner');
-    const name = document.getElementById('winner-name');
-    const score = document.getElementById('winner-score');
+  const banner = document.getElementById("winner-banner");
+  const name = document.getElementById("winner-name");
+  const score = document.getElementById("winner-score");
 
-    name.textContent = winner.name;
-    score.textContent = `${winner.average}/10 Average Score`;
+  name.textContent = winner.name;
+  score.textContent = `${winner.average}/10 Average Score`;
 
-    banner.classList.remove('hidden');
+  banner.classList.remove("hidden");
 
-    // Scroll to winner
-    banner.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // Scroll to winner
+  banner.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 // Show fired banner
 function showFired(worst) {
-    const banner = document.getElementById('fired-banner');
-    const name = document.getElementById('fired-name');
-    const score = document.getElementById('fired-score');
+  const banner = document.getElementById("fired-banner");
+  const name = document.getElementById("fired-name");
+  const score = document.getElementById("fired-score");
 
-    name.textContent = worst.name;
-    score.textContent = `Lowest Score: ${worst.average}/10`;
+  name.textContent = worst.name;
+  score.textContent = `Lowest Score: ${worst.average}/10`;
 
-    banner.classList.remove('hidden');
+  banner.classList.remove("hidden");
+}
+
+// Queue audio for playback
+function queueAudio(audioPayload) {
+  if (!audioPayload) {
+    return;
+  }
+  audioQueue.push(audioPayload);
+  playNextAudio();
+}
+
+// Play next audio in queue
+function playNextAudio() {
+  if (isPlayingAudio || audioQueue.length === 0) {
+    return;
+  }
+
+  isPlayingAudio = true;
+  const audioPayload = audioQueue.shift();
+  const audioData =
+    typeof audioPayload === "string" ? audioPayload : audioPayload.data;
+  const audioMime =
+    typeof audioPayload === "string"
+      ? "audio/mpeg"
+      : audioPayload.mime || "audio/mpeg";
+  if (!audioData) {
+    isPlayingAudio = false;
+    playNextAudio();
+    return;
+  }
+
+  try {
+    const audioPlayer = document.getElementById("audio-player");
+    audioPlayer.src = `data:${audioMime};base64,${audioData}`;
+    audioPlayer.onended = () => {
+      isPlayingAudio = false;
+      playNextAudio();
+    };
+    audioPlayer.onerror = () => {
+      console.error("Audio playback error");
+      isPlayingAudio = false;
+      playNextAudio();
+    };
+    audioPlayer.play().catch((err) => {
+      console.error("Failed to play audio:", err);
+      isPlayingAudio = false;
+      playNextAudio();
+    });
+  } catch (error) {
+    console.error("Audio error:", error);
+    isPlayingAudio = false;
+    playNextAudio();
+  }
 }
 
 // Start a new session
 async function startSession() {
-    if (sessionActive) {
-        alert('A session is already running!');
-        return;
+  if (sessionActive) {
+    alert("A session is already running!");
+    return;
+  }
+
+  const prompt = document.getElementById("prompt").value.trim();
+  const mode = document.getElementById("mode").value;
+  const rounds = parseInt(document.getElementById("rounds").value);
+  const temperature = parseFloat(document.getElementById("temperature").value);
+  const producerEnabled = document.getElementById("producer-enabled").checked;
+  const fireWorst = document.getElementById("fire-worst").checked;
+  const voiceEnabled = document.getElementById("voice-enabled").checked;
+  const includeCustomAgents = document.getElementById(
+    "include-custom-agents",
+  ).checked;
+
+  if (!prompt) {
+    alert("Please enter a story prompt!");
+    return;
+  }
+
+  if (rounds < 1 || rounds > 10) {
+    alert("Please enter between 1 and 10 rounds");
+    return;
+  }
+
+  // Clear previous results
+  clearPreviousSession();
+
+  // Disable start button
+  const startBtn = document.getElementById("start-btn");
+  startBtn.disabled = true;
+  startBtn.innerHTML = '<span class="spinner"></span> Starting...';
+
+  try {
+    const response = await fetch("/api/start", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt: prompt,
+        mode: mode,
+        rounds: rounds,
+        temperature: temperature,
+        producer_enabled: producerEnabled,
+        fire_worst: fireWorst,
+        voice_enabled: voiceEnabled,
+        include_custom_agents: includeCustomAgents,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to start session");
     }
 
-    const prompt = document.getElementById('prompt').value.trim();
-    const rounds = parseInt(document.getElementById('rounds').value);
-    const temperature = parseFloat(document.getElementById('temperature').value);
-    const producerEnabled = document.getElementById('producer-enabled').checked;
-    const fireWorst = document.getElementById('fire-worst').checked;
+    console.log("Session started successfully");
+  } catch (error) {
+    console.error("Failed to start session:", error);
+    alert("Failed to start session: " + error.message);
 
-    if (!prompt) {
-        alert('Please enter a story prompt!');
-        return;
-    }
-
-    if (rounds < 1 || rounds > 10) {
-        alert('Please enter between 1 and 10 rounds');
-        return;
-    }
-
-    // Clear previous results
-    clearPreviousSession();
-
-    // Disable start button
-    const startBtn = document.getElementById('start-btn');
-    startBtn.disabled = true;
-    startBtn.innerHTML = '<span class="spinner"></span> Starting...';
-
-    try {
-        const response = await fetch('/api/start', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                prompt: prompt,
-                rounds: rounds,
-                temperature: temperature,
-                producer_enabled: producerEnabled,
-                fire_worst: fireWorst
-            })
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-            throw new Error(data.error || 'Failed to start session');
-        }
-
-        console.log('Session started successfully');
-    } catch (error) {
-        console.error('Failed to start session:', error);
-        alert('Failed to start session: ' + error.message);
-
-        startBtn.disabled = false;
-        startBtn.textContent = '🎬 Start Writers Room';
-    }
+    startBtn.disabled = false;
+    startBtn.textContent = "Start Writers Room";
+  }
 }
 
 // Clear previous session
 function clearPreviousSession() {
-    // Clear all agent responses
-    const agentIds = [
-        'rod-serling', 'stephen-king', 'hp-lovecraft',
-        'jorge-borges', 'robert-stack', 'rip-tequila-bot', 'the-producer'
-    ];
+  // Clear audio queue
+  audioQueue = [];
+  isPlayingAudio = false;
 
-    agentIds.forEach(id => {
-        const responsesDiv = document.getElementById(`responses-${id}`);
-        if (responsesDiv) {
-            responsesDiv.innerHTML = '<p style="color: #666; font-style: italic;">Waiting...</p>';
-        }
+  // Clear all agent responses
+  const agentIds = [
+    "rod-serling",
+    "stephen-king",
+    "hp-lovecraft",
+    "jorge-borges",
+    "robert-stack",
+    "rip-tequila-bot",
+    "the-producer",
+  ];
 
-        const status = document.getElementById(`status-${id}`);
-        if (status) {
-            status.textContent = 'Waiting...';
-        }
+  agentIds.forEach((id) => {
+    const responsesDiv = document.getElementById(`responses-${id}`);
+    if (responsesDiv) {
+      responsesDiv.innerHTML = '<p class="placeholder-text">Waiting...</p>';
+    }
 
-        const card = document.getElementById(`agent-${id}`);
-        if (card) {
-            card.classList.remove('thinking');
-        }
-    });
+    const status = document.getElementById(`status-${id}`);
+    if (status) {
+      status.textContent = "Waiting...";
+    }
 
-    // Hide results
-    document.getElementById('leaderboard').classList.add('hidden');
-    document.getElementById('winner-banner').classList.add('hidden');
-    document.getElementById('fired-banner').classList.add('hidden');
-    document.getElementById('agent-the-producer').classList.add('hidden');
+    const card = document.getElementById(`agent-${id}`);
+    if (card) {
+      card.classList.remove("thinking");
+    }
+  });
+
+  // Remove dynamically created custom agent cards
+  document.querySelectorAll(".agent-card.custom-agent").forEach((card) => {
+    card.remove();
+  });
+
+  // Hide results
+  document.getElementById("leaderboard").classList.add("hidden");
+  document.getElementById("winner-banner").classList.add("hidden");
+  document.getElementById("fired-banner").classList.add("hidden");
+  document.getElementById("agent-the-producer").classList.add("hidden");
+  document.getElementById("story-state-panel").classList.add("hidden");
 }
 
 // Initialize on page load
-document.addEventListener('DOMContentLoaded', () => {
-    initSocket();
-    console.log('Writers Room Web Interface initialized');
+document.addEventListener("DOMContentLoaded", () => {
+  initSocket();
+  console.log("Writers Room Web Interface initialized");
+
+  // Check voice availability
+  fetch("/api/voice/available")
+    .then((response) => response.json())
+    .then((data) => {
+      const voiceCheckbox = document.getElementById("voice-enabled");
+      if (!data.available || data.providers.length === 0) {
+        voiceCheckbox.disabled = true;
+        voiceCheckbox.parentElement.style.opacity = "0.5";
+        voiceCheckbox.parentElement.title =
+          "TTS not available (no providers configured)";
+      }
+    })
+    .catch((err) => console.log("Voice check failed:", err));
 });

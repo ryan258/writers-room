@@ -54,9 +54,8 @@ fi
 # Launch browser in background (wait a sec for server to start)
 (sleep 2 && open "http://localhost:5001" 2>/dev/null || xdg-open "http://localhost:5001" 2>/dev/null || echo -e "${YELLOW}Please open http://localhost:5001 in your browser${NC}") &
 
-# Start Flask Server
+# Start FastAPI Server
 echo -e "\n${GREEN}🚀 Starting Web Server...${NC}"
 echo -e "${CYAN}   Press Ctrl+C to stop.${NC}\n"
 
-cd web
-python3 app.py
+uvicorn web.app:app --reload --port 5001

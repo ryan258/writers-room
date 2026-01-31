@@ -6,6 +6,20 @@ All issues identified in the code review have been resolved.
 
 ### HIGH Priority
 
+#### Issue #7: Producer Context Scoring (Blocking)
+**Status**: ✅ FIXED
+
+**Problem**:
+- Producer context window too small (4 msgs hardcoded) to see all 6 writers.
+- Messages lacked writer names, so Producer saw 6 anonymous "assistant" messages.
+- Result: Producer hallucinates generic scores.
+
+**Solution**:
+1. `agents.py`: Added `window_size` param (default 15) to cover full rounds.
+2. `web/app.py`: Explicitly prepends "Writer Name: " to message content sent to Producer.
+
+### HIGH Priority
+
 #### Issue #1 & #2: PRODUCER Import and max_tokens Parameter
 **Status**: ✅ ALREADY FIXED IN PHASE 3 (commit b8ecb46)
 

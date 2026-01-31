@@ -14,7 +14,7 @@ print("Testing Writers Room Web Integration...\n")
 # Test 1: Import personalities
 print("1. Testing personalities imports...")
 try:
-    from personalities import (
+    from lib.personalities import (
         ROD_SERLING,
         STEPHEN_KING,
         HP_LOVECRAFT,
@@ -34,7 +34,7 @@ except ImportError as e:
 # Test 2: Import Agent class
 print("\n2. Testing Agent class import...")
 try:
-    from agents import Agent
+    from lib.agents import Agent
     print("   ✓ Agent class imported successfully")
 except ImportError as e:
     print(f"   ✗ Import failed: {e}")
@@ -93,8 +93,9 @@ try:
     # Check what the Agent would see (simulate the logic from agents.py lines 51-68)
     if len(test_context) > 0:
         original_prompt = test_context[0]
-        if len(test_context) > 5:
-            recent_messages = test_context[-4:]
+        window_size = 15
+        if len(test_context) > window_size + 1:
+            recent_messages = test_context[-window_size:]
         else:
             recent_messages = test_context[1:]
 
@@ -114,13 +115,13 @@ except Exception as e:
 print("\n6. Testing web app imports...")
 try:
     sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web'))
-    # Just check if the file can be parsed, don't actually run Flask
+    # Just check if the file can be parsed, don't actually run FastAPI
     with open('web/app.py', 'r') as f:
         content = f.read()
-        if 'from personalities import' in content and 'PRODUCER' in content:
+        if 'from lib.personalities import' in content and 'STORY_MODES' in content:
             print("   ✓ web/app.py has correct imports")
         else:
-            print("   ✗ web/app.py missing PRODUCER import")
+            print("   ✗ web/app.py missing lib imports")
 except Exception as e:
     print(f"   ✗ Error: {e}")
     sys.exit(1)

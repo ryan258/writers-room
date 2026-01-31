@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Custom Agents - Writers Room</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/style.css') }}"
+    />
+    <style>
+      .agents-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+
+      .agent-creator {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 30px;
+      }
+
+      .agent-creator h2 {
+        margin-top: 0;
+        color: var(--accent-green);
+      }
+
+      .template-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 10px;
+        margin-bottom: 20px;
+      }
+
+      .template-card {
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        padding: 12px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+
+      .template-card:hover {
+        border-color: var(--accent-green);
+        background: var(--bg-secondary);
+      }
+
+      .template-card.selected {
+        border-color: var(--accent-green);
+        background: var(--bg-secondary);
+      }
+
+      .template-card h4 {
+        margin: 0 0 5px 0;
+        color: var(--text-primary);
+      }
+
+      .template-card p {
+        margin: 0;
+        font-size: 0.85em;
+        color: var(--text-secondary);
+      }
+
+      .agent-form {
+        display: grid;
+        gap: 15px;
+      }
+
+      .agent-form .form-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 15px;
+      }
+
+      .agent-form label {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--text-secondary);
+      }
+
+      .agent-form input,
+      .agent-form textarea,
+      .agent-form select {
+        width: 100%;
+        padding: 10px;
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        color: var(--text-primary);
+        font-size: 14px;
+      }
+
+      .agent-form textarea {
+        min-height: 100px;
+        resize: vertical;
+      }
+
+      .agent-form input:focus,
+      .agent-form textarea:focus {
+        outline: none;
+        border-color: var(--accent-green);
+      }
+
+      .color-picker-wrapper {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .color-picker-wrapper input[type="color"] {
+        width: 50px;
+        height: 40px;
+        padding: 0;
+        border: none;
+        cursor: pointer;
+      }
+
+      .color-picker-wrapper input[type="text"] {
+        flex: 1;
+      }
+
+      .saved-agents {
+        margin-top: 30px;
+      }
+
+      .saved-agents h2 {
+        color: var(--accent-green);
+        margin-bottom: 20px;
+      }
+
+      .agents-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        gap: 20px;
+      }
+
+      .saved-agent-card {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 15px;
+      }
+
+      .saved-agent-card .agent-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+
+      .saved-agent-card h3 {
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .saved-agent-card .color-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        display: inline-block;
+      }
+
+      .saved-agent-card .specialty {
+        color: var(--text-secondary);
+        font-size: 0.9em;
+        margin-bottom: 10px;
+      }
+
+      .saved-agent-card .guidance {
+        color: var(--text-secondary);
+        opacity: 0.8;
+        font-size: 0.85em;
+        max-height: 60px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .saved-agent-card .actions {
+        margin-top: 15px;
+        display: flex;
+        gap: 10px;
+      }
+
+      .btn-small {
+        padding: 6px 12px;
+        font-size: 0.85em;
+      }
+
+      .btn-danger {
+        background: var(--accent-red);
+        border-color: var(--accent-red);
+      }
+
+      .btn-danger:hover {
+        filter: brightness(0.9);
+      }
+
+      .no-agents {
+        color: var(--text-secondary);
+        text-align: center;
+        padding: 40px;
+        font-style: italic;
+      }
+
+      .success-message {
+        background: rgba(152, 195, 121, 0.1);
+        border: 1px solid var(--accent-green);
+        color: var(--accent-green);
+        padding: 10px 15px;
+        border-radius: 4px;
+        margin-bottom: 15px;
+        display: none;
+      }
+
+      .error-message {
+        background: rgba(224, 108, 117, 0.1);
+        border: 1px solid var(--accent-red);
+        color: var(--accent-red);
+        padding: 10px 15px;
+        border-radius: 4px;
+        margin-bottom: 15px;
+        display: none;
+      }
+
+      .section-hint {
+        color: var(--text-secondary);
+        margin-bottom: 10px;
+      }
+
+      .status-active {
+        color: var(--accent-green);
+      }
+
+      .status-inactive {
+        color: var(--text-secondary);
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Header -->
+    <div class="header">
+      <h1>CUSTOM AGENTS</h1>
+      <p>Create your own collaborative writers</p>
+      <nav class="header-nav">
+        <a href="/">Home</a>
+        <a href="/agents">Custom Agents</a>
+      </nav>
+    </div>
+
+    <div class="agents-container">
+      <!-- Agent Creator -->
+      <div class="agent-creator">
+        <h2>Create New Agent</h2>
+
+        <div id="success-message" class="success-message"></div>
+        <div id="error-message" class="error-message"></div>
+
+        <h3 class="section-hint">Start from Template (optional)</h3>
+        <div class="template-grid" id="template-grid">
+          <!-- Templates loaded via JS -->
+        </div>
+
+        <form class="agent-form" id="agent-form" onsubmit="createAgent(event)">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="agent-name">Agent Name *</label>
+              <input
+                type="text"
+                id="agent-name"
+                required
+                placeholder="e.g., Literary Master"
+              />
+            </div>
+            <div class="form-group">
+              <label for="agent-color">Color</label>
+              <div class="color-picker-wrapper">
+                <input
+                  type="color"
+                  id="agent-color-picker"
+                  value="#888888"
+                  onchange="syncColor(this.value)"
+                />
+                <input
+                  type="text"
+                  id="agent-color"
+                  value="#888888"
+                  placeholder="#888888"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="agent-specialty">Specialty *</label>
+            <input
+              type="text"
+              id="agent-specialty"
+              required
+              placeholder="e.g., Prose excellence, metaphor, and thematic resonance"
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="agent-guidance">Guidance</label>
+            <textarea
+              id="agent-guidance"
+              placeholder="Your expertise: ...
+Use this when: ...
+Don't force it: ...
+Your voice: ..."
+            ></textarea>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="agent-voice">Voice (TTS)</label>
+              <select id="agent-voice">
+                <option value="alloy">Alloy (Neutral)</option>
+                <option value="echo">Echo (Natural)</option>
+                <option value="fable">Fable (Dramatic)</option>
+                <option value="onyx">Onyx (Deep)</option>
+                <option value="nova">Nova (Authoritative)</option>
+                <option value="shimmer">Shimmer (Energetic)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="agent-emoji">Avatar Emoji</label>
+              <input
+                type="text"
+                id="agent-emoji"
+                value="pen"
+                placeholder="pen"
+              />
+            </div>
+          </div>
+
+          <button type="submit" class="btn btn-primary">Create Agent</button>
+        </form>
+      </div>
+
+      <!-- Saved Agents -->
+      <div class="saved-agents">
+        <h2>Your Custom Agents</h2>
+        <div class="agents-list" id="agents-list">
+          <div class="no-agents" id="no-agents">
+            No custom agents yet. Create one above!
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // Load templates on page load
+      async function loadTemplates() {
+        try {
+          const response = await fetch("/api/agents/templates");
+          const templates = await response.json();
+
+          const grid = document.getElementById("template-grid");
+          grid.innerHTML = "";
+
+          for (const [key, template] of Object.entries(templates)) {
+            const card = document.createElement("div");
+            card.className = "template-card";
+            card.dataset.key = key;
+
+            const title = document.createElement("h4");
+            title.textContent = template.name;
+
+            const desc = document.createElement("p");
+            const snippet = template.specialty ? template.specialty.substring(0, 60) : "";
+            desc.textContent = snippet ? `${snippet}...` : "";
+
+            card.appendChild(title);
+            card.appendChild(desc);
+            card.onclick = () => selectTemplate(key, template);
+            grid.appendChild(card);
+          }
+        } catch (error) {
+          console.error("Failed to load templates:", error);
+        }
+      }
+
+      // Select a template
+// Select a template
+      function selectTemplate(key, template) {
+        // Clear previous selection
+        document
+          .querySelectorAll(".template-card")
+          .forEach((c) => c.classList.remove("selected"));
+
+        // Select this one
+        document
+          .querySelector(`.template-card[data-key="${key}"]`)
+          .classList.add("selected");
+
+        // Fill form
+        document.getElementById("agent-name").value = template.name;
+        document.getElementById("agent-specialty").value = template.specialty;
+        document.getElementById("agent-color").value = template.color;
+        document.getElementById("agent-color-picker").value = template.color;
+        document.getElementById("agent-emoji").value = template.avatar_emoji;
+      }
+
+      // Sync color picker with text input
+      function syncColor(value) {
+        document.getElementById("agent-color").value = value;
+      }
+
+      // Load saved agents
+      async function loadAgents() {
+        try {
+          const response = await fetch("/api/agents");
+          const data = await response.json();
+
+          const list = document.getElementById("agents-list");
+          const noAgents = document.getElementById("no-agents");
+
+          if (data.agents.length === 0) {
+            noAgents.style.display = "block";
+            return;
+          }
+
+          noAgents.style.display = "none";
+          list.innerHTML = "";
+
+          for (const agent of data.agents) {
+            const card = document.createElement("div");
+            card.className = "saved-agent-card";
+
+            const header = document.createElement("div");
+            header.className = "agent-header";
+
+            const title = document.createElement("h3");
+            const dot = document.createElement("span");
+            dot.className = "color-dot";
+            dot.style.background = agent.color || "#888888";
+
+            const nameSpan = document.createElement("span");
+            nameSpan.textContent = agent.name;
+
+            title.appendChild(dot);
+            title.appendChild(nameSpan);
+
+            const status = document.createElement("span");
+            status.className = agent.is_active ? "status-active" : "status-inactive";
+            status.textContent = agent.is_active ? "Active" : "Inactive";
+
+            header.appendChild(title);
+            header.appendChild(status);
+
+            const specialty = document.createElement("div");
+            specialty.className = "specialty";
+            specialty.textContent = agent.specialty;
+
+            const guidance = document.createElement("div");
+            guidance.className = "guidance";
+            guidance.textContent = agent.guidance || "No guidance set";
+
+            const actions = document.createElement("div");
+            actions.className = "actions";
+
+            const editBtn = document.createElement("button");
+            editBtn.className = "btn btn-small";
+            editBtn.textContent = "Edit";
+            editBtn.onclick = () => editAgent(agent.id);
+
+            const deleteBtn = document.createElement("button");
+            deleteBtn.className = "btn btn-small btn-danger";
+            deleteBtn.textContent = "Delete";
+            deleteBtn.onclick = () => deleteAgent(agent.id);
+
+            actions.appendChild(editBtn);
+            actions.appendChild(deleteBtn);
+
+            card.appendChild(header);
+            card.appendChild(specialty);
+            card.appendChild(guidance);
+            card.appendChild(actions);
+
+            list.appendChild(card);
+          }
+        } catch (error) {
+          console.error("Failed to load agents:", error);
+        }
+      }
+
+      // Create agent
+// Create agent
+      async function createAgent(event) {
+        event.preventDefault();
+
+        const name = document.getElementById("agent-name").value.trim();
+        const specialty = document
+          .getElementById("agent-specialty")
+          .value.trim();
+        const guidance = document.getElementById("agent-guidance").value.trim();
+        const color = document.getElementById("agent-color").value.trim();
+        const voice_id = document.getElementById("agent-voice").value;
+        const avatar_emoji = document
+          .getElementById("agent-emoji")
+          .value.trim();
+
+        if (!name || !specialty) {
+          showError("Name and Specialty are required");
+          return;
+        }
+
+        try {
+          const response = await fetch("/api/agents", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name,
+              specialty,
+              guidance,
+              color,
+              voice_id,
+              avatar_emoji,
+            }),
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.error || "Failed to create agent");
+          }
+
+          showSuccess(`Agent "${name}" created successfully!`);
+
+          // Clear form
+          document.getElementById("agent-form").reset();
+          document.getElementById("agent-color").value = "#888888";
+          document.getElementById("agent-color-picker").value = "#888888";
+          document
+            .querySelectorAll(".template-card")
+            .forEach((c) => c.classList.remove("selected"));
+
+          // Reload agents list
+          loadAgents();
+        } catch (error) {
+          showError(error.message);
+        }
+      }
+
+      // Delete agent
+      async function deleteAgent(agentId) {
+        if (!confirm("Are you sure you want to delete this agent?")) {
+          return;
+        }
+
+        try {
+          const response = await fetch(`/api/agents/${agentId}`, {
+            method: "DELETE",
+          });
+
+          if (!response.ok) {
+            throw new Error("Failed to delete agent");
+          }
+
+          showSuccess("Agent deleted successfully!");
+          loadAgents();
+        } catch (error) {
+          showError(error.message);
+        }
+      }
+
+      // Edit agent (placeholder - could open modal)
+      function editAgent(agentId) {
+        alert("Edit functionality coming soon! Agent ID: " + agentId);
+      }
+
+      // Show success message
+      function showSuccess(message) {
+        const el = document.getElementById("success-message");
+        el.textContent = message;
+        el.style.display = "block";
+        setTimeout(() => {
+          el.style.display = "none";
+        }, 5000);
+      }
+
+      // Show error message
+      function showError(message) {
+        const el = document.getElementById("error-message");
+        el.textContent = message;
+        el.style.display = "block";
+        setTimeout(() => {
+          el.style.display = "none";
+        }, 5000);
+      }
+
+      // Initialize
+      document.addEventListener("DOMContentLoaded", () => {
+        loadTemplates();
+        loadAgents();
+      });
+    </script>
+  </body>
+</html>

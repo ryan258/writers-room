@@ -3,25 +3,41 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Writers Room: The Mischief Engine</title>
+    <title>Writers Room: Collaborative Story Excellence</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
 </head>
 <body>
     <!-- Header -->
     <div class="header">
-        <h1>🎬 WRITERS ROOM: THE MISCHIEF ENGINE</h1>
-        <p>Where legendary writers collaborate and compete in real-time</p>
+        <h1>WRITERS ROOM: COLLABORATIVE STORY EXCELLENCE</h1>
+        <p>Where legendary writers collaborate around the Center Table</p>
+        <nav class="header-nav">
+            <a href="/">Home</a>
+            <a href="/agents">Custom Agents</a>
+        </nav>
     </div>
 
     <div class="container">
         <!-- Control Panel -->
         <div class="control-panel">
-            <h2>📝 Story Configuration</h2>
+            <h2>Story Configuration</h2>
 
             <div class="form-group">
                 <label for="prompt">Story Prompt</label>
                 <textarea id="prompt" placeholder="Enter your story prompt... (e.g., A man discovers a mysterious door in his basement)"></textarea>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="mode">Story Mode</label>
+                    <select id="mode">
+                        {% for key, mode in modes.items() %}
+                        <option value="{{ key }}" {% if key == 'horror' %}selected{% endif %}>
+                            {{ mode.name }} - {{ mode.description }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
             </div>
 
             <div class="form-row">
@@ -52,14 +68,63 @@
                 </div>
             </div>
 
+            <div class="form-row">
+                <div class="form-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="voice-enabled">
+                        <label for="voice-enabled">Enable Voice (TTS)</label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="include-custom-agents" checked>
+                        <label for="include-custom-agents">Include Custom Agents</label>
+                    </div>
+                </div>
+            </div>
+
             <button class="btn btn-primary" id="start-btn" onclick="startSession()">
-                🎬 Start Writers Room
+                Start Writers Room
             </button>
+        </div>
+
+        <!-- Story State Panel -->
+        <div class="story-state-panel hidden" id="story-state-panel">
+            <h2>CENTER TABLE: Story State</h2>
+            <div class="story-state-content">
+                <div class="story-state-row">
+                    <span class="label">Mode:</span>
+                    <span id="state-mode" class="value">-</span>
+                </div>
+                <div class="story-state-row">
+                    <span class="label">Act:</span>
+                    <span id="state-act" class="value">-</span>
+                </div>
+                <div class="story-state-row">
+                    <span class="label">Tension:</span>
+                    <span id="state-tension" class="value">-</span>
+                    <div class="tension-bar">
+                        <div id="tension-fill" class="tension-fill" style="width: 30%"></div>
+                    </div>
+                </div>
+                <div class="story-state-row">
+                    <span class="label">Pacing:</span>
+                    <span id="state-pacing" class="value">-</span>
+                </div>
+                <div class="story-state-row">
+                    <span class="label">Words:</span>
+                    <span id="state-words" class="value">0</span>
+                </div>
+                <div class="story-state-row story-needs">
+                    <span class="label">Story Needs:</span>
+                    <span id="state-needs" class="value needs-text">-</span>
+                </div>
+            </div>
         </div>
 
         <!-- Status Banner -->
         <div class="status-banner" id="status-banner">
-            <div class="status-icon">⏳</div>
+            <div class="status-icon">...</div>
             <div class="status-text">
                 <strong>Session Active</strong>
                 <div id="status-detail">Initializing...</div>
@@ -68,7 +133,7 @@
 
         <!-- Leaderboard (hidden until Producer evaluates) -->
         <div class="leaderboard hidden" id="leaderboard">
-            <h2>📊 Leaderboard</h2>
+            <h2>Leaderboard</h2>
             <ul class="leaderboard-list" id="leaderboard-list">
                 <!-- Populated by JavaScript -->
             </ul>
@@ -76,14 +141,14 @@
 
         <!-- Winner Banner (hidden until session complete) -->
         <div class="winner-banner hidden" id="winner-banner">
-            <h2>🏆 Winner</h2>
+            <h2>Winner</h2>
             <div class="winner-name" id="winner-name"></div>
             <div class="winner-score" id="winner-score"></div>
         </div>
 
         <!-- Fired Banner (hidden unless fire-worst enabled) -->
         <div class="fired-banner hidden" id="fired-banner">
-            <h2>🔥 FIRED!</h2>
+            <h2>FIRED!</h2>
             <div class="winner-name" id="fired-name"></div>
             <div class="winner-score" id="fired-score"></div>
         </div>
@@ -94,10 +159,11 @@
             <div class="agent-card" id="agent-rod-serling">
                 <div class="agent-header">
                     <div class="agent-name text-cyan">Rod Serling</div>
+                    <div class="agent-specialty">Irony & Moral Complexity</div>
                     <div class="agent-status" id="status-rod-serling">Waiting...</div>
                 </div>
                 <div class="agent-responses" id="responses-rod-serling">
-                    <p style="color: #666; font-style: italic;">The Twilight Zone creator awaits...</p>
+                    <p class="placeholder-text">The Twilight Zone creator awaits...</p>
                 </div>
             </div>
 
@@ -105,10 +171,11 @@
             <div class="agent-card" id="agent-stephen-king">
                 <div class="agent-header">
                     <div class="agent-name text-red">Stephen King</div>
+                    <div class="agent-specialty">Visceral Horror</div>
                     <div class="agent-status" id="status-stephen-king">Waiting...</div>
                 </div>
                 <div class="agent-responses" id="responses-stephen-king">
-                    <p style="color: #666; font-style: italic;">The Master of Horror is ready...</p>
+                    <p class="placeholder-text">The Master of Horror is ready...</p>
                 </div>
             </div>
 
@@ -116,10 +183,11 @@
             <div class="agent-card" id="agent-hp-lovecraft">
                 <div class="agent-header">
                     <div class="agent-name text-magenta">H.P. Lovecraft</div>
+                    <div class="agent-specialty">Cosmic Dread</div>
                     <div class="agent-status" id="status-hp-lovecraft">Waiting...</div>
                 </div>
                 <div class="agent-responses" id="responses-hp-lovecraft">
-                    <p style="color: #666; font-style: italic;">The Void Scrivener stirs...</p>
+                    <p class="placeholder-text">The Void Scrivener stirs...</p>
                 </div>
             </div>
 
@@ -127,10 +195,11 @@
             <div class="agent-card" id="agent-jorge-borges">
                 <div class="agent-header">
                     <div class="agent-name text-blue">Jorge Luis Borges</div>
+                    <div class="agent-specialty">Paradox & Infinity</div>
                     <div class="agent-status" id="status-jorge-borges">Waiting...</div>
                 </div>
                 <div class="agent-responses" id="responses-jorge-borges">
-                    <p style="color: #666; font-style: italic;">The Labyrinth Maker contemplates...</p>
+                    <p class="placeholder-text">The Labyrinth Maker contemplates...</p>
                 </div>
             </div>
 
@@ -138,10 +207,11 @@
             <div class="agent-card" id="agent-robert-stack">
                 <div class="agent-header">
                     <div class="agent-name text-white">Robert Stack</div>
+                    <div class="agent-specialty">Mystery & Investigation</div>
                     <div class="agent-status" id="status-robert-stack">Waiting...</div>
                 </div>
                 <div class="agent-responses" id="responses-robert-stack">
-                    <p style="color: #666; font-style: italic;">Unsolved Mysteries host investigates...</p>
+                    <p class="placeholder-text">Unsolved Mysteries host investigates...</p>
                 </div>
             </div>
 
@@ -149,25 +219,30 @@
             <div class="agent-card" id="agent-rip-tequila-bot">
                 <div class="agent-header">
                     <div class="agent-name text-yellow">RIP Tequila Bot</div>
+                    <div class="agent-specialty">Comic Relief</div>
                     <div class="agent-status" id="status-rip-tequila-bot">Waiting...</div>
                 </div>
                 <div class="agent-responses" id="responses-rip-tequila-bot">
-                    <p style="color: #666; font-style: italic;">Time to RIP!</p>
+                    <p class="placeholder-text">Time to RIP!</p>
                 </div>
             </div>
 
             <!-- The Producer (hidden initially) -->
             <div class="agent-card producer-card hidden" id="agent-the-producer">
                 <div class="agent-header">
-                    <div class="agent-name text-green">🎬 The Producer</div>
+                    <div class="agent-name text-green">The Producer</div>
+                    <div class="agent-specialty">Quality Evaluation</div>
                     <div class="agent-status" id="status-the-producer">Waiting...</div>
                 </div>
                 <div class="agent-responses" id="responses-the-producer">
-                    <p style="color: #666; font-style: italic;">The judge is watching...</p>
+                    <p class="placeholder-text">The judge is watching...</p>
                 </div>
             </div>
         </div>
     </div>
+
+    <!-- Audio element for voice playback -->
+    <audio id="audio-player" style="display: none;"></audio>
 
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>

@@ -21,16 +21,20 @@ The project is built with the following structure to keep the logic clean and mo
 /writers-room
 │
 ├── main.py              # The CLI orchestrator (game loop)
-├── agents.py            # The Agent class definition & OpenRouter API logic
-├── personalities.py     # The System Prompts (The "Soul" of the agents)
+├── lib/                 # Core logic (portable Arsenal modules)
+│   ├── agents.py        # Agent class definition & OpenRouter API logic
+│   ├── personalities.py # System prompts (the "Soul" of the agents)
+│   ├── session.py       # Session orchestration
+│   ├── story_state.py   # Center Table story state
+│   └── voice.py         # Optional TTS support
 ├── debug_model.py       # Testing utility for model behavior
 ├── .env                 # API Keys (gitignored)
 ├── .env.example         # Template for environment variables
 ├── requirements.txt     # Dependencies
 ├── transcripts/         # Folder to save the chaotic outputs (auto-created)
 │
-├── web/                 # Web interface (Phase 5)
-│   ├── app.py           # Flask + SocketIO backend
+├── web/                 # Web interface
+│   ├── app.py           # FastAPI backend + WebSocket handlers
 │   ├── static/
 │   │   ├── css/
 │   │   │   └── style.css        # Dark theme styling
