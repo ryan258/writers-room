@@ -72,7 +72,10 @@
                 <div class="form-group">
                     <div class="checkbox-group">
                         <input type="checkbox" id="voice-enabled">
-                        <label for="voice-enabled">Enable Voice (TTS)</label>
+                        <label for="voice-enabled">Enable Voice (Experimental TTS)</label>
+                    </div>
+                    <div class="form-note" id="voice-note">
+                        Voice playback is experimental. Configure OpenAI or ElevenLabs keys before enabling it.
                     </div>
                 </div>
                 <div class="form-group">
@@ -80,12 +83,16 @@
                         <input type="checkbox" id="include-custom-agents" checked>
                         <label for="include-custom-agents">Include Custom Agents</label>
                     </div>
+                    <div class="form-note">
+                        The web server supports one active session at a time.
+                    </div>
                 </div>
             </div>
 
             <button class="btn btn-primary" id="start-btn" onclick="startSession()">
                 Start Writers Room
             </button>
+            <div class="session-note hidden" id="session-note"></div>
         </div>
 
         <!-- Story State Panel -->

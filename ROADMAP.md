@@ -1,166 +1,32 @@
-# Writers Room Development Roadmap
+# Writers Room Roadmap
 
-## Phase 1: MVP - The Basic Writers Room
+## Current State
 
-**Goal**: Get three agents arguing in your terminal
+Writers Room is shippable in its current form:
 
-### 1.1 Environment Setup
-- [x] Create virtual environment
-- [x] Install dependencies (`openai`, `python-dotenv`)
-- [x] Create `.env` file with OpenRouter API key
-- [x] Test OpenRouter connection with a simple API call
+- CLI and web UI are both operational
+- Custom agents support create, edit, delete, and active/inactive toggling
+- Web sessions now save transcripts to `transcripts/`
+- A real pytest suite covers the core library and API paths
+- Setup and assistant-facing docs now match the codebase
 
-### 1.2 Core Agent System
-- [x] Build `Agent` class in `agents.py`
-  - [x] Constructor: name, model, system_prompt
-  - [x] Method: `generate_response(context)`
-  - [x] OpenRouter API integration with proper headers
-- [x] Create `personalities.py` with the system prompts
-  - [x] Cosmic Horror ("H.P. Lovecraft")
-  - [x] Sitcom/Twist ("Rod Serling")
-  - [x] Marketing Exec ("RIP Tequila Bot")
-  - [x] *Expanded Roster: King, Borges, Stack*
+## In Scope for the Current Release
 
-### 1.3 Basic Orchestration
-- [x] Build `main.py` game loop
-  - [x] Initialize agents
-  - [x] Get user's starting prompt
-  - [x] Run 3 rounds of agent turns (round-robin)
-  - [x] Pass conversation history to each agent
-  - [x] Print responses to terminal
+- Collaborative writing rounds with six built-in writers
+- Producer scoring and leaderboard updates
+- Six genre modes
+- Shared Center Table story-state management
+- Custom agent management
+- Best-effort experimental voice playback
 
-### 1.4 Terminal Output
-- [x] Add colored output for each agent
-  - [x] Distinct colors for all 6 agents
-- [x] Format conversation clearly in terminal
+## Post-Ship Enhancements
 
-**Deliverable**: You can run `python main.py`, enter a prompt, and watch six agents argue for 3 rounds in color.
+- Configurable built-in roster from the web UI
+- Replay or recovery for WebSocket events missed during reconnects
+- Stronger end-to-end coverage for live TTS providers
+- Additional interaction modes beyond the current collaboration-first behavior
 
----
+## Release Constraints
 
-## Phase 2: Enhanced Experience
-
-**Goal**: Make it more fun and usable
-
-### 2.1 Transcript Saving
-- [x] Create `transcripts/` directory
-- [x] Save each session to timestamped file
-- [x] Format saved transcripts nicely
-
-### 2.2 Configurable Rounds
-- [x] Let user choose number of rounds
-- [x] Add option to continue after rounds complete
-- [ ] Add "interrupt" command to stop mid-session (Ctrl+C works)
-
-### 2.3 Error Handling
-- [x] Handle API failures gracefully (retries in Agent class)
-- [x] Validate OpenRouter API key on startup
-- [x] Better error messages
-
-### 2.4 Agent Improvements
-- [x] Add temperature/creativity controls per agent
-- [x] Allow swapping models via command-line args
-- [x] Max token limits already set (80 tokens per response)
-
-**Deliverable**: ✅ COMPLETE - Enhanced terminal experience with CLI args, validation, and better UX.
-
----
-
-## Phase 3: The Producer Agent
-
-**Goal**: Add a judge to the chaos
-
-### 3.1 Producer Agent
-- [x] Create seventh agent: "The Producer"
-- [x] System prompt: Judges which writer is "winning"
-- [x] Runs after each round
-- [x] Provides snarky commentary on each agent's contribution
-
-### 3.2 Scoring System
-- [x] Producer rates each contribution (1-10)
-- [x] Track scores across rounds
-- [x] Display leaderboard after each round
-- [x] Declare a "winner" at the end
-- [x] Producer can "fire" the worst performer (--fire-worst flag)
-
-**Deliverable**: ✅ COMPLETE - A meta-agent that provides commentary and judges the others.
-
----
-
-## Phase 4: Audio Experience
-
-**Goal**: Hear them argue out loud
-
-### 4.1 Text-to-Speech Integration
-- [ ] Choose TTS provider (ElevenLabs, OpenAI TTS, or local)
-- [ ] Assign unique voices to each agent
-- [ ] Stream or play audio after each response
-- [ ] Add toggle to enable/disable TTS
-
-### 4.2 Audio Improvements
-- [ ] Save audio transcripts alongside text
-- [ ] Add background music/ambiance (optional)
-
-**Deliverable**: Optional audio playback where you can hear the agents argue.
-
----
-
-## Phase 5: Custom Web Interface
-
-**Goal**: Build the dark-themed card-based UI
-
-### 5.1 Frontend Framework Setup
-- [x] Choose stack: Flask/FastAPI backend + HTML/CSS/JS frontend
-- [x] Set up dark theme CSS with gradient backgrounds
-- [x] WebSocket integration with Socket.IO
-
-### 5.2 UI Implementation
-- [x] Header Section with branding
-- [x] Prompt Input Area with configuration controls
-- [x] Agent Cards (Responsive grid layout for 6 writers + Producer)
-- [x] Live leaderboard display
-- [x] Real-time agent response streaming
-- [x] Status tracking and session management
-- [x] Winner and loser announcements
-
-**Deliverable**: ✅ COMPLETE - A polished dark-themed web interface with real-time updates.
-
----
-
-## Phase 6: Experimental Features
-
-**Goal**: Wild ideas to try
-
-### 6.1 More Agents
-- [x] Expand agent roster (Added Serling, King, Borges, Stack)
-- [ ] Make agent roster configurable via UI/CLI
-
-### 6.2 Dynamic Personalities
-- [ ] Let user create custom agents via UI
-- [ ] Save/load personality presets
-
-### 6.3 Story Modes
-- [ ] **Conflict Mode**: Agents actively try to sabotage each other
-- [ ] **Collaboration Mode**: Agents try to build on each other's ideas
-- [ ] **Chaos Mode**: Random agent order, random interruptions
-
-**Deliverable**: Experimental features to make it even more chaotic and fun.
-
----
-
-## Technical Debt & Maintenance
-
-### Ongoing Tasks
-- [ ] Add unit tests for Agent class
-- [ ] Add integration tests for OpenRouter API
-- [ ] Document model performance
-- [ ] Track OpenRouter costs
-
----
-
-## Current Status
-
-**Phase**: Phase 5 Complete ✅
-**Completed**: Phases 1, 2, 3, 5
-**Remaining**: Phase 4 (Audio/TTS), Phase 6 (Experimental)
-**Next Step**: Choose Phase 4 (Audio/TTS) or Phase 6 (Custom agents & story modes)
+- The web server is single-session by design today
+- Voice remains experimental until provider-level live verification is automated

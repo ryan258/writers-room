@@ -131,6 +131,23 @@ body {
   cursor: pointer;
 }
 
+.form-note {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.session-note {
+  margin-top: 15px;
+  padding: 12px;
+  border-radius: 5px;
+  background: rgba(166, 172, 205, 0.08);
+  border: 1px solid rgba(166, 172, 205, 0.2);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
 .btn {
   padding: 12px 30px;
   font-size: 1rem;

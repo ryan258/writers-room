@@ -3,6 +3,8 @@ Session Orchestration for Writers Room.
 """
 import threading
 import re
+from datetime import datetime
+from pathlib import Path
 from typing import Dict, Any, List, Optional, Callable
 
 from .story_state import StoryStateManager
@@ -37,6 +39,18 @@ class SessionEvent:
 def parse_producer_scores(producer_response: str, agent_names: List[str]) -> Dict[str, int]:
     """Parse scores from Producer's response with robust fallbacks."""
     scores = {}
+    response_lines = [line.strip() for line in producer_response.splitlines() if line.strip()]
+
+    def extract_score(patterns: List[str], text: str) -> Optional[int]:
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if not match:
+                continue
+            try:
+                return max(1, min(10, int(match.group(1))))
+            except (ValueError, IndexError):
+                continue
+        return None
 
     # Define aliases for agents with complex names
     aliases = {
@@ -60,42 +74,31 @@ def parse_producer_scores(producer_response: str, agent_names: List[str]) -> Dic
                 break
 
             patterns = [
-                rf"{re.escape(name_variant)}:\s*(\d+)\s*/\s*10",
-                rf"{re.escape(name_variant)}.*?(\d+)\s*/\s*10",
-                rf"{re.escape(name_variant)}.*?score.*?(\d+)",
-                rf"{re.escape(name_variant)}.*?(\d+)\s*out of 10",
-                rf"\*\*?{re.escape(name_variant)}\*\*?.*?(\d+)/10",
-                rf"{re.escape(name_variant)}.*?(\d+)/10",
+                rf"(?:\*\*)?{re.escape(name_variant)}(?:\*\*)?\s*:\s*(\d+)\s*/\s*10\b",
+                rf"(?:\*\*)?{re.escape(name_variant)}(?:\*\*)?.*?\b(\d+)\s*/\s*10\b",
+                rf"(?:\*\*)?{re.escape(name_variant)}(?:\*\*)?.*?\bscore(?:d)?\D*(\d+)\b",
+                rf"(?:\*\*)?{re.escape(name_variant)}(?:\*\*)?.*?\b(\d+)\s*out of\s*10\b",
             ]
 
-            for pattern in patterns:
-                match = re.search(pattern, producer_response, re.IGNORECASE | re.DOTALL)
-                if match:
-                    try:
-                        score = int(match.group(1))
-                        # Clamp between 1-10
-                        scores[agent_name] = max(1, min(10, score))
-                        found_score_for_agent = True
-                        break
-                    except (ValueError, IndexError):
-                        continue
+            for line in response_lines:
+                score = extract_score(patterns, line)
+                if score is not None:
+                    scores[agent_name] = score
+                    found_score_for_agent = True
+                    break
 
     # Fallback patterns
     for i, agent_name in enumerate(agent_names):
         if agent_name not in scores:
             writer_patterns = [
-                rf"Writer\s*#?{i+1}\s*.*?:.*?(\d+)/10",
-                rf"Writer\s*#?{i+1}\s*.*?(\d+)\s*out of 10",
+                rf"Writer\s*#?{i+1}\b.*?:\s*(\d+)\s*/\s*10\b",
+                rf"Writer\s*#?{i+1}\b.*?\b(\d+)\s*out of\s*10\b",
             ]
-            for pattern in writer_patterns:
-                match = re.search(pattern, producer_response, re.IGNORECASE)
-                if match:
-                    try:
-                        score = int(match.group(1))
-                        scores[agent_name] = max(1, min(10, score))
-                        break
-                    except ValueError:
-                        continue
+            for line in response_lines:
+                score = extract_score(writer_patterns, line)
+                if score is not None:
+                    scores[agent_name] = score
+                    break
 
     # Fallback: assign neutral scores if absolutely nothing found
     if not scores and agent_names:
@@ -110,16 +113,20 @@ class SessionOrchestrator:
         self.agents = []
         self.producer = None
         self.conversation_history = []
+        self.producer_feedback = []
         self.agent_scores = {}
         self.config = {}
         self.story_manager = None
         self.voice_enabled = False
         self.stop_event = threading.Event()
+        self.transcript_path = None
 
     def initialize(self, prompt: str, config: Dict[str, Any]):
         self.config = config
         self.active = True
         self.stop_event.clear()
+        self.producer_feedback = []
+        self.transcript_path = None
         self.conversation_history = [
             {"role": "user", "content": f"Write a scene about: {prompt}"}
         ]
@@ -218,6 +225,10 @@ class SessionOrchestrator:
             traceback.print_exc()
         finally:
              self.active = False
+             try:
+                 self.transcript_path = self.save_transcript()
+             except Exception as exc:
+                 self.emit(SessionEvent.ERROR, {'message': f"Transcript save failed: {exc}"})
              self.emit(SessionEvent.SESSION_COMPLETED, self._get_session_summary())
 
     def _run_round(self, round_num, total_rounds):
@@ -329,6 +340,11 @@ class SessionOrchestrator:
              'audio': producer_audio[0] if producer_audio else None,
              'audio_mime': producer_audio[1] if producer_audio else None
          })
+         self.producer_feedback.append({
+             'round': round_num,
+             'response': producer_response,
+             'scores': round_scores,
+         })
 
     def _calculate_leaderboard(self):
          leaderboard = []
@@ -348,6 +364,54 @@ class SessionOrchestrator:
          # Logic for final cleanup or stats is handled in get_session_summary for the event
          pass
 
+    def save_transcript(self) -> Optional[str]:
+        """Persist the web session transcript and return the file path."""
+        if not self.conversation_history:
+            return None
+
+        transcript_dir = Path(self.config.get("transcript_dir", "transcripts"))
+        transcript_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        transcript_path = transcript_dir / f"web_session_{timestamp}.txt"
+        prompt = self.config.get("prompt") or self.conversation_history[0]["content"]
+
+        with transcript_path.open("w", encoding="utf-8") as handle:
+            handle.write("=" * 60 + "\n")
+            handle.write("WRITERS ROOM WEB TRANSCRIPT\n")
+            handle.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            handle.write(f"Prompt: {prompt}\n")
+            handle.write(f"Mode: {self.config.get('mode', 'horror')}\n")
+            handle.write(f"Rounds Requested: {self.config.get('rounds', 0)}\n")
+            if self.story_manager:
+                state = self.story_manager.get_state()
+                handle.write(f"Final Act: {state.current_act.name}\n")
+                handle.write(f"Word Count: {state.word_count}\n")
+            handle.write("=" * 60 + "\n\n")
+
+            for message in self.conversation_history:
+                role = message.get("role")
+                if role == "user":
+                    handle.write(f"[USER] {message.get('content', '')}\n\n")
+                elif role == "assistant":
+                    author = message.get("name", "Agent")
+                    handle.write(f"[{author}] {message.get('content', '')}\n\n")
+
+            if self.producer_feedback:
+                handle.write("-" * 60 + "\n")
+                handle.write("PRODUCER VERDICTS\n")
+                handle.write("-" * 60 + "\n\n")
+                for verdict in self.producer_feedback:
+                    handle.write(f"[ROUND {verdict['round']}] {verdict['response']}\n")
+                    if verdict["scores"]:
+                        score_summary = ", ".join(
+                            f"{name}: {score}/10" for name, score in verdict["scores"].items()
+                        )
+                        handle.write(f"Scores: {score_summary}\n")
+                    handle.write("\n")
+
+        return str(transcript_path)
+
     def _get_session_summary(self):
         leaderboard = self._calculate_leaderboard()
         winner = leaderboard[0] if leaderboard else None
@@ -358,5 +422,6 @@ class SessionOrchestrator:
             'leaderboard': leaderboard,
             'winner': winner,
             'worst': worst,
-            'story_state': final_state.to_dict()
+            'story_state': final_state.to_dict(),
+            'transcript_path': self.transcript_path,
         }

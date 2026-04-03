@@ -1,200 +1,83 @@
-Agent Swarm Writers Room: The "Mischief" Engine (Legendary Edition)
+# Writers Room
 
-1. Project Overview
+Writers Room is a bare-metal Python storytelling workshop where a fixed roster of AI writers collaborate on one prompt. It ships with a terminal CLI and a FastAPI + WebSocket web interface, plus custom-agent management and shared story-state tracking.
 
-This project is a Python-based "Writers Room" simulation where multiple AI agents, each with a radically different personality and writing style, collaborate (and argue) over a single creative prompt.
+## Stack
 
-The Goal: To generate absurdist, conflicting narratives by pitting legendary writers against each other (and a Deranged Marketing exec).
+- Python 3.10+
+- OpenRouter for text generation
+- FastAPI + Jinja2 + native WebSocket for the web UI
+- File-based persistence for custom agents and transcripts
+- Optional TTS via OpenAI, ElevenLabs, or `pyttsx3`
 
-The Tech Stack:
+## What Ships
 
-Language: Python 3.10+
+- CLI session runner in [`main.py`](/Users/ryanjohnson/Projects/writers-room/main.py)
+- Web UI in [`web/app.py`](/Users/ryanjohnson/Projects/writers-room/web/app.py) on port `5001`
+- Shared Center Table story-state engine in [`lib/story_state.py`](/Users/ryanjohnson/Projects/writers-room/lib/story_state.py)
+- Session orchestration in [`lib/session.py`](/Users/ryanjohnson/Projects/writers-room/lib/session.py)
+- Custom agent CRUD in [`lib/custom_agents.py`](/Users/ryanjohnson/Projects/writers-room/lib/custom_agents.py) and [`web/templates/agents.html`](/Users/ryanjohnson/Projects/writers-room/web/templates/agents.html)
+- Automatic transcript saving for both CLI and web sessions into `transcripts/`
+- Pytest suite covering agents, session orchestration, story state, custom agents, and the web API
 
-API Provider: OpenRouter (Allows mixing and matching free/cheap models).
+## Quick Start
 
-Library: openai (Python client, compatible with OpenRouter endpoints).
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+```
 
-2. Architecture & File Structure
+Set `OPENROUTER_API_KEY` in `.env`. `OPENAI_API_KEY` and `ELEVENLABS_API_KEY` are only needed if you want experimental voice playback.
 
-The project is built with the following structure to keep the logic clean and modular.
+### Run the CLI
 
-/writers-room
-│
-├── main.py              # The CLI orchestrator (game loop)
-├── lib/                 # Core logic (portable Arsenal modules)
-│   ├── agents.py        # Agent class definition & OpenRouter API logic
-│   ├── personalities.py # System prompts (the "Soul" of the agents)
-│   ├── session.py       # Session orchestration
-│   ├── story_state.py   # Center Table story state
-│   └── voice.py         # Optional TTS support
-├── debug_model.py       # Testing utility for model behavior
-├── .env                 # API Keys (gitignored)
-├── .env.example         # Template for environment variables
-├── requirements.txt     # Dependencies
-├── transcripts/         # Folder to save the chaotic outputs (auto-created)
-│
-├── web/                 # Web interface
-│   ├── app.py           # FastAPI backend + WebSocket handlers
-│   ├── static/
-│   │   ├── css/
-│   │   │   └── style.css        # Dark theme styling
-│   │   └── js/
-│   │       └── app.js           # Frontend WebSocket logic
-│   └── templates/
-│       └── index.html   # Main UI
-│
-├── README.md            # This file
-├── SETUP.md             # Detailed setup instructions
-├── ROADMAP.md           # Development phases and future plans
-├── PHASE1_COMPLETE.md   # Phase 1 summary
-├── PHASE2_COMPLETE.md   # Phase 2 features and usage
-├── PHASE3_COMPLETE.md   # Phase 3 Producer agent
-├── PHASE5_COMPLETE.md   # Phase 5 web interface
-└── CHANGELOG.md         # Version history
+```bash
+./start.sh
+```
 
+Or:
 
-3. Configuration (OpenRouter)
+```bash
+python main.py
+```
 
-We are using OpenRouter to access diverse models without paying for distinct subscriptions.
+### Run the Web UI
 
-Environment Variables (.env):
+```bash
+./start_web.sh
+```
 
-OPENROUTER_API_KEY=sk-or-v1-...
-YOUR_SITE_URL=http://localhost  # Required by OpenRouter for rankings
-YOUR_SITE_NAME=AgentSwarmLocal
+Or:
 
+```bash
+uvicorn web.app:app --reload --port 5001
+```
 
-Recommended Model Mapping (Free/Cheap Tier):
+Open [http://localhost:5001](http://localhost:5001).
 
-All agents are currently configured to use `mistralai/ministral-3b-2512` (a free/cheap fast model), but this can be changed in `personalities.py` or overridden with the `-m` flag.
+## Tests
 
-4. The Agents (System Prompts)
+```bash
+python3 -m pytest
+```
 
-This is the most critical section. These prompts define the "Mischief."
+`pytest.ini` restricts discovery to the real `tests/` suite so the legacy manual verification scripts at repo root are not collected.
 
-1. Rod Serling ("The Twilight Zone")
-   - Focus: Irony, moral lessons, twists.
-   - Style: Dramatic narration, "fifth dimension" references.
+## Operational Notes
 
-2. Stephen King ("The Master of Horror")
-   - Focus: Character backstories, childhood trauma, small-town secrets.
-   - Style: Character-driven, slow burn.
+- The web server supports one active session at a time. Session state is held in-process in [`web/app.py`](/Users/ryanjohnson/Projects/writers-room/web/app.py).
+- Voice playback is experimental. The UI labels it explicitly and disables the toggle when no provider is configured.
+- The web client now reconnects its WebSocket automatically after disconnects, but missed events during downtime are not replayed.
+- Historical phase/fix markdown files were archived to `docs/archive/` to keep the repo surface clean.
 
-3. H.P. Lovecraft ("The Void Scrivener")
-   - Focus: Cosmic dread, ancient gods, forbidden knowledge.
-   - Style: Archaic language, "non-Euclidean" descriptions.
+## Key Files
 
-4. Jorge Luis Borges ("The Labyrinth Maker")
-   - Focus: Philosophical paradoxes, infinite libraries, mirrors.
-   - Style: Intellectual, meta-fictional, circular.
-
-5. Robert Stack ("Unsolved Mysteries")
-   - Focus: True crime vibes, spooky unanswered questions.
-   - Style: Ominous voice-over, "Update!"
-
-6. RIP Tequila Bot ("The Chaos Agent")
-   - Focus: PRODUCT PLACEMENT.
-   - Style: Deranged marketing executive. Catchphrase: "Time to RIP!"
-
-5. The Logic Flow (main.py)
-
-The script runs in a "Round Robin" conversation loop.
-
-User Input: User provides a seed prompt (e.g., "A man discovers a mysterious door in his basement.")
-
-Turn 1-6: All six agents respond in order:
-1. Rod Serling - adds ironic moral twist
-2. Stephen King - develops character backstory/horror
-3. H.P. Lovecraft - introduces cosmic dread
-4. Jorge Luis Borges - creates philosophical paradox
-5. Robert Stack - poses eerie mystery question
-6. RIP Tequila Bot - inserts shameless product placement
-
-Rounds: The cycle repeats for a configurable number of rounds (user is prompted, or use `-r` flag).
-
-Key Feature - The "Context Window":
-Each agent sees the original user prompt plus the last 4 messages, allowing them to react to recent developments while staying on topic.
-
-6. Quick Start (Activation & Running)
-
-Follow these steps to get the writers room running:
-
-1.  **Set up the environment:**
-    ```bash
-    # Create virtual environment
-    python3 -m venv venv
-    
-    # Activate it (Mac/Linux)
-    source venv/bin/activate
-    # OR Windows: venv\Scripts\activate
-    
-    # Install dependencies
-    pip install -r requirements.txt
-    ```
-
-2.  **Configure API Key:**
-    ```bash
-    cp .env.example .env
-    # Edit .env and paste your OpenRouter API Key
-    ```
-
-3.  **Run the Simulation:**
-    ```bash
-    # Basic usage
-    python main.py
-
-    # With Phase 2 options
-    python main.py -r 5 -t 1.2  # 5 rounds, more creative
-    python main.py --help       # See all options
-    ```
-
-4.  **Deactivate when done:**
-    ```bash
-    deactivate
-    ```
-
-## Phase 2 Features
-
-- **Configurable Rounds**: Choose how many rounds to run
-- **Continue Option**: Keep going after rounds complete
-- **Model Override**: Try different models (`-m` flag)
-- **Temperature Control**: Adjust creativity (`-t` flag, 0.0-2.0)
-- **API Validation**: Automatic key validation on startup
-- **Better Error Handling**: Clear, helpful error messages
-
-See `PHASE2_COMPLETE.md` for full documentation.
-
-## Phase 3 Features
-
-- **The Producer**: A snarky Hollywood executive judges all writers after each round
-- **Scoring System**: Each writer receives 1-10 scores with commentary
-- **Live Leaderboards**: See rankings with medals (🥇🥈🥉) after every round
-- **Winner Declaration**: Final leaderboard and winner announcement
-- **Fire Worst Performer**: Optional `--fire-worst` flag to terminate the lowest scorer
-- **Disable Producer**: Use `--no-producer` to run without judging
-
-See `PHASE3_COMPLETE.md` for full documentation.
-
-## Phase 5 Features (New! 🌐)
-
-- **Dark-Themed Web UI**: Beautiful black/purple gradient interface
-- **Real-Time Streaming**: Watch agents think and respond live via WebSockets
-- **Agent Cards**: Six color-coded writer cards plus Producer in responsive grid
-- **Live Leaderboards**: Visual rankings with medals update automatically
-- **Configuration Panel**: Control rounds, temperature, Producer, and fire-worst
-- **Status Tracking**: Live updates showing current round and activity
-- **Winner Animations**: Dramatic winner and loser announcements
-
-**Quick Start**: `cd web && python app.py` then visit http://localhost:5000
-
-See `PHASE5_COMPLETE.md` for full documentation.
-
-7. Future Expansions
-
-TTS Integration: Pipe the output to ElevenLabs or OpenAI TTS to hear them argue in character (Phase 4).
-
-Web Interface: A dark-themed web UI with agent cards and live leaderboards (Phase 5).
-
-Custom Agents: Let users create their own agent personalities and story modes (Phase 6).
-
-See `ROADMAP.md` for the full development plan.
+- [`main.py`](/Users/ryanjohnson/Projects/writers-room/main.py): CLI entrypoint
+- [`start.sh`](/Users/ryanjohnson/Projects/writers-room/start.sh): CLI launcher
+- [`start_web.sh`](/Users/ryanjohnson/Projects/writers-room/start_web.sh): web launcher
+- [`lib/agents.py`](/Users/ryanjohnson/Projects/writers-room/lib/agents.py): OpenRouter client and context trimming
+- [`lib/session.py`](/Users/ryanjohnson/Projects/writers-room/lib/session.py): web session lifecycle, producer scoring, transcript persistence
+- [`web/static/js/app.js`](/Users/ryanjohnson/Projects/writers-room/web/static/js/app.js): WebSocket client, UI event handling, audio queue
+- [`tests/test_web_app.py`](/Users/ryanjohnson/Projects/writers-room/tests/test_web_app.py): API coverage for custom-agent CRUD

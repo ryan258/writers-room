@@ -13,3 +13,7 @@ pyttsx3>=2.90
 
 # Optional: ElevenLabs for premium voice quality
 # elevenlabs>=0.2.0
+
+# Test dependencies
+pytest>=8.0.0
+httpx>=0.27.0

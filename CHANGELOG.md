@@ -221,3 +221,19 @@ All notable changes to this project will be documented in this file.
 - Automatic transcript saving
 - Error handling for missing API keys
 - Setup documentation
+
+## 2.1.0 - 2026-04-02
+
+### Added
+- `pytest` suite for agent, session, story-state, custom-agent, and web API coverage.
+- `start.sh` CLI launcher.
+- Automatic transcript persistence for web sessions.
+
+### Changed
+- Replaced the stale `CLAUDE.md` onboarding file with documentation that matches the current project.
+- Added real custom-agent editing in the `/agents` UI, including active/inactive toggling.
+- Added WebSocket reconnection handling and explicit experimental voice messaging in the web UI.
+- Updated `README.md`, `SETUP.md`, `ROADMAP.md`, and `.env.example` for the current stack and runtime.
+
+### Maintenance
+- Archived obsolete historical markdown files into `docs/archive/`.

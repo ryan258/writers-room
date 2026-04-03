@@ -8,6 +8,7 @@ import asyncio
 import os
 import sys
 import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -27,7 +28,14 @@ from lib.personalities import STORY_MODES, DEFAULT_MODEL
 from lib.session import SessionOrchestrator, SessionEvent
 from lib.voice import get_voice_manager
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.loop = asyncio.get_running_loop()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 # Static files and templates
 WEB_DIR = Path(__file__).resolve().parent
@@ -51,6 +59,7 @@ current_session: Dict[str, Any] = {
     "orchestrator": None,
     "thread": None,
     "active": False,
+    "last_transcript": None,
 }
 
 # Custom agent manager
@@ -89,11 +98,6 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-@app.on_event("startup")
-async def on_startup() -> None:
-    app.state.loop = asyncio.get_running_loop()
-
-
 def emit_event(event: str, data: Dict[str, Any]) -> None:
     """Thread-safe event emitter for SessionOrchestrator."""
     loop = getattr(app.state, "loop", None)
@@ -105,11 +109,13 @@ def run_session_thread(prompt: str, rounds: int, config: Dict[str, Any]) -> None
     global current_session
     try:
         current_session["active"] = True
+        current_session["last_transcript"] = None
         orchestrator = SessionOrchestrator(emit_event)
         current_session["orchestrator"] = orchestrator
 
         orchestrator.initialize(prompt, config)
         orchestrator.run_session(rounds)
+        current_session["last_transcript"] = orchestrator.transcript_path
     except Exception as exc:
         emit_event(SessionEvent.ERROR, {"message": str(exc)})
     finally:
@@ -173,7 +179,7 @@ async def start_session(req: StartRequest):
     if not prompt:
         return JSONResponse({"error": "Prompt is required"}, status_code=400)
 
-    config = req.dict()
+    config = req.model_dump()
     config["model"] = req.model or DEFAULT_MODEL
     config["prompt"] = prompt
 
@@ -205,6 +211,7 @@ async def get_status():
         "active": current_session.get("active", False),
         "config": config,
         "story_state": story_state,
+        "last_transcript": current_session.get("last_transcript"),
     }
 
 
@@ -224,6 +231,8 @@ async def check_voice_available():
     return {
         "available": len(providers) > 0,
         "providers": providers,
+        "experimental": True,
+        "message": "Voice playback is experimental and currently best-effort only.",
     }
 
 
@@ -276,7 +285,7 @@ async def update_custom_agent(agent_id: str, payload: AgentUpdate):
     if not agent:
         return JSONResponse({"error": "Agent not found"}, status_code=404)
 
-    data = payload.dict(exclude_unset=True)
+    data = payload.model_dump(exclude_unset=True)
 
     if "name" in data:
         agent.name = data["name"]

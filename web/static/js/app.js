@@ -4,15 +4,35 @@ let socket = null;
 let sessionActive = false;
 let audioQueue = [];
 let isPlayingAudio = false;
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_DELAY_MS = 5000;
 
 // Initialize WebSocket connection
 function initSocket() {
+  if (
+    socket &&
+    (socket.readyState === WebSocket.OPEN ||
+      socket.readyState === WebSocket.CONNECTING)
+  ) {
+    return;
+  }
+
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
   const wsUrl = `${protocol}://${window.location.host}/ws`;
   socket = new WebSocket(wsUrl);
 
   socket.addEventListener("open", () => {
     console.log("Connected to server");
+    reconnectAttempts = 0;
+    if (reconnectTimer) {
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (sessionActive) {
+      updateStatusBanner(true, "Connection restored. Waiting for live updates...");
+    }
+    rehydrateSessionState();
   });
 
   socket.addEventListener("message", (event) => {
@@ -28,11 +48,98 @@ function initSocket() {
 
   socket.addEventListener("close", () => {
     console.log("Disconnected from server");
+    scheduleReconnect();
   });
 
   socket.addEventListener("error", (err) => {
     console.error("WebSocket error:", err);
   });
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) {
+    return;
+  }
+
+  const delay = Math.min(1000 * 2 ** reconnectAttempts, MAX_RECONNECT_DELAY_MS);
+  reconnectAttempts += 1;
+
+  if (sessionActive) {
+    updateStatusBanner(
+      true,
+      `Connection lost. Reconnecting in ${Math.round(delay / 1000)}s...`,
+    );
+  }
+
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = null;
+    initSocket();
+  }, delay);
+}
+
+function showSessionNote(message) {
+  const note = document.getElementById("session-note");
+  if (!note) {
+    return;
+  }
+  note.textContent = message;
+  note.classList.remove("hidden");
+}
+
+function clearSessionNote() {
+  const note = document.getElementById("session-note");
+  if (!note) {
+    return;
+  }
+  note.textContent = "";
+  note.classList.add("hidden");
+}
+
+function setStartButtonState(active) {
+  const startBtn = document.getElementById("start-btn");
+  if (!startBtn) {
+    return;
+  }
+
+  startBtn.disabled = active;
+  startBtn.textContent = active ? "Session Running..." : "Start Writers Room";
+}
+
+async function rehydrateSessionState() {
+  try {
+    const response = await fetch("/api/status");
+    if (!response.ok) {
+      throw new Error(`Status request failed with ${response.status}`);
+    }
+
+    const status = await response.json();
+    sessionActive = Boolean(status.active);
+
+    if (sessionActive) {
+      setStartButtonState(true);
+      updateStatusBanner(true, "Session in progress. Waiting for live updates...");
+
+      if (status.config && status.config.producer_enabled) {
+        document.getElementById("agent-the-producer").classList.remove("hidden");
+      }
+      if (status.story_state) {
+        updateStoryStatePanel(status.story_state);
+      }
+      clearSessionNote();
+      return;
+    }
+
+    setStartButtonState(false);
+    updateStatusBanner(false);
+
+    if (status.last_transcript) {
+      showSessionNote(`Transcript saved to ${status.last_transcript}`);
+    } else {
+      clearSessionNote();
+    }
+  } catch (error) {
+    console.error("Failed to rehydrate session state:", error);
+  }
 }
 
 function handleEvent(eventName, data) {
@@ -43,6 +150,7 @@ function handleEvent(eventName, data) {
     case "session_started":
       console.log("Session started:", data);
       sessionActive = true;
+      clearSessionNote();
       updateStatusBanner(true, `Round 1 of ${data.rounds} starting...`);
       document.getElementById("story-state-panel").classList.remove("hidden");
       if (data.mode_info) {
@@ -176,6 +284,9 @@ function handleEvent(eventName, data) {
       console.log("Session completed:", data);
       sessionActive = false;
       updateStatusBanner(false);
+      if (data.transcript_path) {
+        showSessionNote(`Transcript saved to ${data.transcript_path}`);
+      }
 
       if (data.story_state) {
         updateStoryStatePanel(data.story_state);
@@ -197,6 +308,7 @@ function handleEvent(eventName, data) {
       alert("Error: " + data.message);
       sessionActive = false;
       updateStatusBanner(false);
+      showSessionNote(`Session error: ${data.message}`);
 
       const startBtn = document.getElementById("start-btn");
       startBtn.disabled = false;
@@ -487,6 +599,7 @@ async function startSession() {
 
   // Clear previous results
   clearPreviousSession();
+  clearSessionNote();
 
   // Disable start button
   const startBtn = document.getElementById("start-btn");
@@ -532,6 +645,7 @@ function clearPreviousSession() {
   // Clear audio queue
   audioQueue = [];
   isPlayingAudio = false;
+  clearSessionNote();
 
   // Clear all agent responses
   const agentIds = [
@@ -584,6 +698,12 @@ document.addEventListener("DOMContentLoaded", () => {
     .then((response) => response.json())
     .then((data) => {
       const voiceCheckbox = document.getElementById("voice-enabled");
+      const voiceNote = document.getElementById("voice-note");
+      if (voiceNote && data.message) {
+        voiceNote.textContent = data.available
+          ? `${data.message} Available providers: ${data.providers.join(", ")}.`
+          : `${data.message} Configure OPENAI_API_KEY or ELEVENLABS_API_KEY to enable it.`;
+      }
       if (!data.available || data.providers.length === 0) {
         voiceCheckbox.disabled = true;
         voiceCheckbox.parentElement.style.opacity = "0.5";
