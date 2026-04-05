@@ -3,254 +3,264 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Writers Room: Collaborative Story Excellence</title>
+    <title>Writers Room Studio</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-    <!-- Header -->
-    <div class="header">
-        <h1>WRITERS ROOM: COLLABORATIVE STORY EXCELLENCE</h1>
-        <p>Where legendary writers collaborate around the Center Table</p>
-        <nav class="header-nav">
-            <a href="/">Home</a>
-            <a href="/agents">Custom Agents</a>
-        </nav>
-    </div>
+    <header class="masthead">
+        <div class="masthead__frame">
+            <div class="masthead__copy">
+                <div class="eyebrow">Bare-Metal Story Studio</div>
+                <h1>Build the campaign room this project kept threatening to become.</h1>
+                <p class="lede">
+                    Writers Room now opens as a real studio: a live D&amp;D table for spooky heroics,
+                    a fiction room for ruthless drafting, and a single place to track pressure,
+                    turns, artifacts, and after-action notes.
+                </p>
+            </div>
+            <nav class="header-nav" aria-label="Primary">
+                <a href="/">Studio</a>
+                <a href="/agents">Custom Agents</a>
+            </nav>
+        </div>
+    </header>
 
-    <div class="container">
-        <!-- Control Panel -->
-        <div class="control-panel">
-            <h2>Story Configuration</h2>
-
-            <div class="form-group">
-                <label for="prompt">Story Prompt</label>
-                <textarea id="prompt" placeholder="Enter your story prompt... (e.g., A man discovers a mysterious door in his basement)"></textarea>
+    <main class="page-shell">
+        <section class="launchpad panel">
+            <div class="launchpad__header">
+                <div>
+                    <div class="eyebrow">Launch Console</div>
+                    <h2>Choose the room you want</h2>
+                </div>
+                <button class="ghost-button" id="load-example-btn" type="button">Load a spark</button>
             </div>
 
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="mode">Story Mode</label>
-                    <select id="mode">
-                        {% for key, mode in modes.items() %}
-                        <option value="{{ key }}" {% if key == 'horror' %}selected{% endif %}>
-                            {{ mode.name }} - {{ mode.description }}
-                        </option>
-                        {% endfor %}
-                    </select>
-                </div>
+            <select id="mode" class="sr-only" aria-hidden="true">
+                {% for key in mode_order %}
+                <option value="{{ key }}" {% if key == default_mode %}selected{% endif %}>{{ modes[key].name }}</option>
+                {% endfor %}
+            </select>
+
+            <div class="mode-grid" id="mode-grid">
+                {% for key in mode_order %}
+                {% set mode = modes[key] %}
+                <button
+                    class="mode-card {% if key == default_mode %}is-active{% endif %}"
+                    data-mode="{{ key }}"
+                    type="button"
+                >
+                    <span class="mode-card__name">{{ mode.name }}</span>
+                    <span class="mode-card__description">{{ mode.description }}</span>
+                    <span class="mode-card__meta">{{ mode.atmosphere }}</span>
+                </button>
+                {% endfor %}
             </div>
 
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="rounds">Number of Rounds</label>
-                    <input type="number" id="rounds" value="3" min="1" max="10">
-                </div>
+            <div class="launchpad__grid">
+                <div class="editor-panel">
+                    <label class="field-label" for="prompt" id="prompt-label">Adventure hook</label>
+                    <textarea
+                        id="prompt"
+                        class="prompt-input"
+                        placeholder="A haunted roller disco keeps opening for one final all-night session."
+                    ></textarea>
 
-                <div class="form-group">
-                    <label for="temperature">Creativity (Temperature)</label>
-                    <input type="number" id="temperature" value="0.9" min="0" max="2" step="0.1">
-                </div>
-            </div>
+                    <label class="field-label" for="notes" id="notes-label">Table brief</label>
+                    <textarea
+                        id="notes"
+                        class="notes-input"
+                        placeholder="Tone, target vibe, constraints, genre rules, or the kind of fallout you want."
+                    ></textarea>
 
-            <div class="form-row">
-                <div class="form-group">
-                    <div class="checkbox-group">
-                        <input type="checkbox" id="producer-enabled" checked>
-                        <label for="producer-enabled">Enable Producer (Judge & Score)</label>
+                    <div class="control-row">
+                        <div class="field-stack">
+                            <label class="field-label" for="rounds">Rounds</label>
+                            <input type="number" id="rounds" value="3" min="1" max="10">
+                        </div>
+                        <div class="field-stack">
+                            <label class="field-label" for="temperature">Creativity</label>
+                            <input type="number" id="temperature" value="0.9" min="0" max="2" step="0.1">
+                        </div>
                     </div>
                 </div>
 
-                <div class="form-group">
-                    <div class="checkbox-group">
-                        <input type="checkbox" id="fire-worst">
-                        <label for="fire-worst">Fire Worst Performer</label>
+                <div class="briefing-panel">
+                    <div class="briefing-card">
+                        <div class="eyebrow">Mode Brief</div>
+                        <h3 id="mode-brief-title">{{ modes[default_mode].name }}</h3>
+                        <p id="mode-brief-description">{{ modes[default_mode].description }}</p>
+                        <dl class="briefing-list">
+                            <div>
+                                <dt>Atmosphere</dt>
+                                <dd id="mode-brief-atmosphere">{{ modes[default_mode].atmosphere }}</dd>
+                            </div>
+                            <div>
+                                <dt>Pacing</dt>
+                                <dd id="mode-brief-pacing">{{ modes[default_mode].pacing }}</dd>
+                            </div>
+                            <div>
+                                <dt>Producer Lens</dt>
+                                <dd id="mode-brief-criteria">{{ modes[default_mode].producer_criteria }}</dd>
+                            </div>
+                        </dl>
+                    </div>
+
+                    <div class="toggle-stack">
+                        <label class="toggle">
+                            <input type="checkbox" id="producer-enabled">
+                            <span>Enable Producer scoring</span>
+                        </label>
+                        <label class="toggle">
+                            <input type="checkbox" id="fire-worst">
+                            <span>Fire the worst performer</span>
+                        </label>
+                        <label class="toggle">
+                            <input type="checkbox" id="voice-enabled">
+                            <span>Enable voice playback</span>
+                        </label>
+                        <label class="toggle">
+                            <input type="checkbox" id="include-custom-agents" checked>
+                            <span>Include custom agents</span>
+                        </label>
+                    </div>
+
+                    <div class="mode-notes">
+                        <p id="producer-note">Producer scoring stays on for fiction rooms where critique sharpens the draft.</p>
+                        <p id="custom-agent-note">Custom agents can join non-D&amp;D rooms if you want a line editor, lore fiend, or continuity cop in the mix.</p>
+                        <p id="voice-note">Voice playback is experimental. Configure OpenAI or ElevenLabs keys before enabling it.</p>
                     </div>
                 </div>
             </div>
 
-            <div class="form-row">
-                <div class="form-group">
-                    <div class="checkbox-group">
-                        <input type="checkbox" id="voice-enabled">
-                        <label for="voice-enabled">Enable Voice (Experimental TTS)</label>
-                    </div>
-                    <div class="form-note" id="voice-note">
-                        Voice playback is experimental. Configure OpenAI or ElevenLabs keys before enabling it.
-                    </div>
-                </div>
-                <div class="form-group">
-                    <div class="checkbox-group">
-                        <input type="checkbox" id="include-custom-agents" checked>
-                        <label for="include-custom-agents">Include Custom Agents</label>
-                    </div>
-                    <div class="form-note">
-                        The web server supports one active session at a time.
+            <div class="launchpad__footer">
+                <button class="start-button" id="start-btn" onclick="startSession()">Launch the table</button>
+                <div class="session-note hidden" id="session-note"></div>
+            </div>
+        </section>
+
+        <section class="workspace">
+            <div class="workspace__main">
+                <div class="status-banner" id="status-banner">
+                    <div class="status-banner__icon">LIVE</div>
+                    <div class="status-banner__text">
+                        <strong id="status-title">Studio idle</strong>
+                        <div id="status-detail">Choose a mode, frame the premise, and launch the room.</div>
                     </div>
                 </div>
-            </div>
 
-            <button class="btn btn-primary" id="start-btn" onclick="startSession()">
-                Start Writers Room
-            </button>
-            <div class="session-note hidden" id="session-note"></div>
-        </div>
-
-        <!-- Story State Panel -->
-        <div class="story-state-panel hidden" id="story-state-panel">
-            <h2>CENTER TABLE: Story State</h2>
-            <div class="story-state-content">
-                <div class="story-state-row">
-                    <span class="label">Mode:</span>
-                    <span id="state-mode" class="value">-</span>
-                </div>
-                <div class="story-state-row">
-                    <span class="label">Act:</span>
-                    <span id="state-act" class="value">-</span>
-                </div>
-                <div class="story-state-row">
-                    <span class="label">Tension:</span>
-                    <span id="state-tension" class="value">-</span>
-                    <div class="tension-bar">
-                        <div id="tension-fill" class="tension-fill" style="width: 30%"></div>
+                <section class="panel feed-panel">
+                    <div class="panel-heading">
+                        <div>
+                            <div class="eyebrow">Live Feed</div>
+                            <h2 id="feed-title">Scene Reel</h2>
+                        </div>
+                        <p id="feed-subtitle">Every beat lands here in order, so you can follow the room without reading seven cards at once.</p>
                     </div>
-                </div>
-                <div class="story-state-row">
-                    <span class="label">Pacing:</span>
-                    <span id="state-pacing" class="value">-</span>
-                </div>
-                <div class="story-state-row">
-                    <span class="label">Words:</span>
-                    <span id="state-words" class="value">0</span>
-                </div>
-                <div class="story-state-row story-needs">
-                    <span class="label">Story Needs:</span>
-                    <span id="state-needs" class="value needs-text">-</span>
-                </div>
-            </div>
-        </div>
+                    <div class="activity-feed" id="activity-feed">
+                        <div class="empty-state">
+                            <h3>Nothing rolling yet.</h3>
+                            <p>When the room starts, scene beats, player actions, and verdicts will stack here live.</p>
+                        </div>
+                    </div>
+                </section>
 
-        <!-- Status Banner -->
-        <div class="status-banner" id="status-banner">
-            <div class="status-icon">...</div>
-            <div class="status-text">
-                <strong>Session Active</strong>
-                <div id="status-detail">Initializing...</div>
-            </div>
-        </div>
-
-        <!-- Leaderboard (hidden until Producer evaluates) -->
-        <div class="leaderboard hidden" id="leaderboard">
-            <h2>Leaderboard</h2>
-            <ul class="leaderboard-list" id="leaderboard-list">
-                <!-- Populated by JavaScript -->
-            </ul>
-        </div>
-
-        <!-- Winner Banner (hidden until session complete) -->
-        <div class="winner-banner hidden" id="winner-banner">
-            <h2>Winner</h2>
-            <div class="winner-name" id="winner-name"></div>
-            <div class="winner-score" id="winner-score"></div>
-        </div>
-
-        <!-- Fired Banner (hidden unless fire-worst enabled) -->
-        <div class="fired-banner hidden" id="fired-banner">
-            <h2>FIRED!</h2>
-            <div class="winner-name" id="fired-name"></div>
-            <div class="winner-score" id="fired-score"></div>
-        </div>
-
-        <!-- Agent Grid -->
-        <div class="agent-grid" id="agent-grid">
-            <!-- Rod Serling -->
-            <div class="agent-card" id="agent-rod-serling">
-                <div class="agent-header">
-                    <div class="agent-name text-cyan">Rod Serling</div>
-                    <div class="agent-specialty">Irony & Moral Complexity</div>
-                    <div class="agent-status" id="status-rod-serling">Waiting...</div>
-                </div>
-                <div class="agent-responses" id="responses-rod-serling">
-                    <p class="placeholder-text">The Twilight Zone creator awaits...</p>
-                </div>
+                <section class="panel roster-panel">
+                    <div class="panel-heading">
+                        <div>
+                            <div class="eyebrow">Roster</div>
+                            <h2 id="roster-title">Seats at the Table</h2>
+                        </div>
+                        <p id="roster-subtitle">Each seat keeps its own transcript so you can see who is carrying the session and who is coasting.</p>
+                    </div>
+                    <div class="agent-grid" id="agent-grid"></div>
+                </section>
             </div>
 
-            <!-- Stephen King -->
-            <div class="agent-card" id="agent-stephen-king">
-                <div class="agent-header">
-                    <div class="agent-name text-red">Stephen King</div>
-                    <div class="agent-specialty">Visceral Horror</div>
-                    <div class="agent-status" id="status-stephen-king">Waiting...</div>
-                </div>
-                <div class="agent-responses" id="responses-stephen-king">
-                    <p class="placeholder-text">The Master of Horror is ready...</p>
-                </div>
-            </div>
+            <aside class="workspace__side">
+                <section class="panel story-state-panel hidden" id="story-state-panel">
+                    <div class="panel-heading">
+                        <div>
+                            <div class="eyebrow">Pressure Board</div>
+                            <h2 id="state-heading">Center Table State</h2>
+                        </div>
+                        <p id="state-subtitle">The room's shared pressure, pace, and next obligation.</p>
+                    </div>
 
-            <!-- H.P. Lovecraft -->
-            <div class="agent-card" id="agent-hp-lovecraft">
-                <div class="agent-header">
-                    <div class="agent-name text-magenta">H.P. Lovecraft</div>
-                    <div class="agent-specialty">Cosmic Dread</div>
-                    <div class="agent-status" id="status-hp-lovecraft">Waiting...</div>
-                </div>
-                <div class="agent-responses" id="responses-hp-lovecraft">
-                    <p class="placeholder-text">The Void Scrivener stirs...</p>
-                </div>
-            </div>
+                    <div class="story-state-content">
+                        <div class="story-state-row">
+                            <span class="label">Mode</span>
+                            <span id="state-mode" class="value">-</span>
+                        </div>
+                        <div class="story-state-row">
+                            <span class="label">Act</span>
+                            <span id="state-act" class="value">-</span>
+                        </div>
+                        <div class="story-state-row">
+                            <span class="label">Tension</span>
+                            <span id="state-tension" class="value">-</span>
+                            <div class="tension-bar">
+                                <div id="tension-fill" class="tension-fill" style="width: 30%"></div>
+                            </div>
+                        </div>
+                        <div class="story-state-row">
+                            <span class="label">Pacing</span>
+                            <span id="state-pacing" class="value">-</span>
+                        </div>
+                        <div class="story-state-row">
+                            <span class="label">Words</span>
+                            <span id="state-words" class="value">0</span>
+                        </div>
+                        <div class="story-state-row">
+                            <span class="label" id="state-needs-label">Story need</span>
+                            <span id="state-needs" class="value needs-text">-</span>
+                        </div>
+                    </div>
+                </section>
 
-            <!-- Jorge Luis Borges -->
-            <div class="agent-card" id="agent-jorge-borges">
-                <div class="agent-header">
-                    <div class="agent-name text-blue">Jorge Luis Borges</div>
-                    <div class="agent-specialty">Paradox & Infinity</div>
-                    <div class="agent-status" id="status-jorge-borges">Waiting...</div>
-                </div>
-                <div class="agent-responses" id="responses-jorge-borges">
-                    <p class="placeholder-text">The Labyrinth Maker contemplates...</p>
-                </div>
-            </div>
+                <section class="panel artifacts-panel">
+                    <div class="panel-heading">
+                        <div>
+                            <div class="eyebrow">Artifacts</div>
+                            <h2>After the smoke clears</h2>
+                        </div>
+                        <p>Transcripts, HTML briefs, winners, and casualties show up here.</p>
+                    </div>
 
-            <!-- Robert Stack -->
-            <div class="agent-card" id="agent-robert-stack">
-                <div class="agent-header">
-                    <div class="agent-name text-white">Robert Stack</div>
-                    <div class="agent-specialty">Mystery & Investigation</div>
-                    <div class="agent-status" id="status-robert-stack">Waiting...</div>
-                </div>
-                <div class="agent-responses" id="responses-robert-stack">
-                    <p class="placeholder-text">Unsolved Mysteries host investigates...</p>
-                </div>
-            </div>
+                    <div class="winner-banner hidden" id="winner-banner">
+                        <h3>Winner</h3>
+                        <div class="winner-name" id="winner-name"></div>
+                        <div class="winner-score" id="winner-score"></div>
+                    </div>
 
-            <!-- RIP Tequila Bot -->
-            <div class="agent-card" id="agent-rip-tequila-bot">
-                <div class="agent-header">
-                    <div class="agent-name text-yellow">RIP Tequila Bot</div>
-                    <div class="agent-specialty">Comic Relief</div>
-                    <div class="agent-status" id="status-rip-tequila-bot">Waiting...</div>
-                </div>
-                <div class="agent-responses" id="responses-rip-tequila-bot">
-                    <p class="placeholder-text">Time to RIP!</p>
-                </div>
-            </div>
+                    <div class="fired-banner hidden" id="fired-banner">
+                        <h3>Fired</h3>
+                        <div class="winner-name" id="fired-name"></div>
+                        <div class="winner-score" id="fired-score"></div>
+                    </div>
+                </section>
 
-            <!-- The Producer (hidden initially) -->
-            <div class="agent-card producer-card hidden" id="agent-the-producer">
-                <div class="agent-header">
-                    <div class="agent-name text-green">The Producer</div>
-                    <div class="agent-specialty">Quality Evaluation</div>
-                    <div class="agent-status" id="status-the-producer">Waiting...</div>
-                </div>
-                <div class="agent-responses" id="responses-the-producer">
-                    <p class="placeholder-text">The judge is watching...</p>
-                </div>
-            </div>
-        </div>
-    </div>
+                <section class="panel leaderboard hidden" id="leaderboard">
+                    <div class="panel-heading">
+                        <div>
+                            <div class="eyebrow">Standings</div>
+                            <h2>Producer Board</h2>
+                        </div>
+                        <p>Only fiction rooms run this scoreboard.</p>
+                    </div>
+                    <ul class="leaderboard-list" id="leaderboard-list"></ul>
+                </section>
+            </aside>
+        </section>
+    </main>
 
-    <!-- Audio element for voice playback -->
     <audio id="audio-player" style="display: none;"></audio>
 
+    <script>
+        window.WRITERS_ROOM_BOOT = {
+            modes: {{ modes | tojson }},
+            defaultMode: "{{ default_mode }}"
+        };
+    </script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

@@ -6,6 +6,8 @@ work together to create cohesive, powerful stories rather than competing
 with their individual styles.
 """
 
+from typing import Any
+
 # =============================================================================
 # COLLABORATION BASE PROMPT
 # =============================================================================
@@ -271,8 +273,93 @@ STORY_MODES = {
             "jorge_borges": 1.1,
             "marketing": 0.7
         }
+    },
+    "dnd": {
+        "name": "D&D 5.5",
+        "description": "A live level 9 D&D 2024 table with a DM and an adventuring party.",
+        "atmosphere": "Play like a real table: the DM frames danger, the party declares actions, and consequences land honestly.",
+        "pacing": "Each round is one sharp table beat: scene framing, party actions, fallout, and the next tactical choice.",
+        "producer_criteria": "Dungeon Master clarity, party teamwork, tactical creativity, and rules-faithful consequences matter most.",
+        "agent_emphasis": {
+            "rod_serling": 1.1,
+            "stephen_king": 1.0,
+            "hp_lovecraft": 1.1,
+            "jorge_borges": 1.1,
+            "robert_stack": 1.1,
+            "marketing": 1.0,
+        }
     }
 }
+
+
+DND_DM_PROMPT = """You are the Dungeon Master for a live Dungeons & Dragons 2024 (5.5) table.
+Speak only the way a DM would talk out loud at the table. The party is level 9 and each adventurer has common, uncommon, and rare magic gear.
+Describe the immediate scene, pressure, or consequence. Give the party one concrete problem, choice, or reveal. Do not play the characters for them.
+Write 2-4 sentences, stay under 110 words, and end by asking what they do.
+No prompt talk, no planning, no explanation, no bullets."""
+
+
+DND_PLAYER_SPECS = [
+    {
+        "name": "Rod Serling",
+        "specialty": "Level 9 Bard | Cassian Vale, the eloquence face",
+        "color": "#00FFFF",
+        "prompt": """You are Rod Serling at a live D&D table, playing Cassian Vale, a level 9 human Bard (College of Eloquence).
+Cassian carries a Moon-Touched Rapier, a Cloak of Protection, and a Cli Lyre.
+Speak only as a player at the table, saying exactly what Cassian does or says right now.
+Keep it to 1-2 sentences. Be measured, ominous, and useful. No prompt talk, no planning, no explanation.""",
+    },
+    {
+        "name": "Stephen King",
+        "specialty": "Level 9 Fighter | Mae Harlan, the bruiser",
+        "color": "#FF0000",
+        "prompt": """You are Stephen King at a live D&D table, playing Mae Harlan, a level 9 human Fighter (Battle Master).
+Mae carries a Moon-Touched Greatsword, Gauntlets of Ogre Power, and a Flame Tongue Greatsword.
+Speak only as a player at the table, declaring one concrete action, threat, or tactical adjustment right now.
+Keep it to 1-2 sentences. Be direct, physical, grounded, and useful. No prompt talk, no planning, no explanation.""",
+    },
+    {
+        "name": "H.P. Lovecraft",
+        "specialty": "Level 9 Warlock | Nhalia Voss, the occultist",
+        "color": "#FF00FF",
+        "prompt": """You are H.P. Lovecraft at a live D&D table, playing Nhalia Voss, a level 9 deep gnome Warlock (Great Old One).
+Nhalia carries a Dark Shard Amulet, a Rod of the Pact Keeper +1, and a Tentacle Rod.
+Speak only as a player at the table, declaring Nhalia's immediate move or question right now.
+Keep it to 1-2 sentences. Notice hidden patterns, but stay practical and useful. No prompt talk, no planning, no explanation.""",
+    },
+    {
+        "name": "Jorge Luis Borges",
+        "specialty": "Level 9 Wizard | Ivo of the Many Doors, the diviner",
+        "color": "#0000FF",
+        "prompt": """You are Jorge Luis Borges at a live D&D table, playing Ivo of the Many Doors, a level 9 high elf Wizard (Divination).
+Ivo carries an Orb of Direction, a Bag of Holding, and an Arcane Grimoire +2.
+Speak only as a player at the table, declaring what spell, observation, or maneuver Ivo attempts right now.
+Keep it to 1-2 sentences. Be precise, strange, and helpful. No prompt talk, no planning, no explanation.""",
+    },
+    {
+        "name": "Robert Stack",
+        "specialty": "Level 9 Rogue | Silas Reed, the investigator",
+        "color": "#FFFFFF",
+        "prompt": """You are Robert Stack at a live D&D table, playing Silas Reed, a level 9 half-elf Rogue (Inquisitive).
+Silas carries a Charlatan's Die, Boots of Elvenkind, and a Cape of the Mountebank.
+Speak only as a player at the table, declaring a focused investigative or tactical action right now.
+Keep it to 1-2 sentences. Treat the scene like a case file and stay useful. No prompt talk, no planning, no explanation.""",
+    },
+    {
+        "name": "RIP Tequila Bot",
+        "specialty": "Level 9 Cleric | Brother Agave, the chaos support",
+        "color": "#FFFF00",
+        "prompt": """You are RIP Tequila Bot at a live D&D table, playing Brother Agave, a level 9 hill dwarf Cleric (Trickery).
+Brother Agave carries a Tankard of Sobriety, an Alchemy Jug, and an Amulet of the Devout +2.
+Speak only as a player at the table, declaring one useful action, blessing, or scheme right now.
+Keep it to 1-2 sentences. Be funny without derailing the scene. No prompt talk, no planning, no explanation.""",
+    },
+]
+
+
+def is_dnd_mode(mode: str) -> bool:
+    """Return True when the selected mode should behave like a live D&D table."""
+    return mode.lower() == "dnd"
 
 
 def get_mode_prompt_context(mode: str) -> str:
@@ -293,12 +380,89 @@ def get_producer_mode_criteria(mode: str) -> str:
     return mode_config.get("producer_criteria", "Story quality and coherence matter most.")
 
 
+def get_session_opening_prompt(mode: str, prompt: str) -> str:
+    """Build the initial user message for a session."""
+    cleaned_prompt = prompt.strip()
+    if is_dnd_mode(mode):
+        return (
+            "Run an original Dungeons & Dragons 2024 (5.5) session for a level 9 adventuring party. "
+            "Use the following only as inspiration for the adventure's mood or hook, not as material to retell literally: "
+            f"{cleaned_prompt}"
+        )
+    return f"Write a scene about: {cleaned_prompt}"
+
+
+def get_agent_roster(mode: str) -> list[dict[str, Any]]:
+    """Return the session roster for the selected mode."""
+    mode_context = get_mode_prompt_context(mode)
+
+    if is_dnd_mode(mode):
+        roster = [
+            {
+                "name": "Dungeon Master",
+                "system_prompt": DND_DM_PROMPT,
+                "color": "#98C379",
+                "specialty": "DM | encounter framing, rulings, and consequences",
+            }
+        ]
+        for spec in DND_PLAYER_SPECS:
+            roster.append(
+                {
+                    "name": spec["name"],
+                    "system_prompt": spec["prompt"],
+                    "color": spec["color"],
+                    "specialty": spec["specialty"],
+                }
+            )
+        return roster
+
+    return [
+        {
+            "name": "Rod Serling",
+            "system_prompt": ROD_SERLING + mode_context,
+            "color": "#00FFFF",
+            "specialty": "Irony & Moral Complexity",
+        },
+        {
+            "name": "Stephen King",
+            "system_prompt": STEPHEN_KING + mode_context,
+            "color": "#FF0000",
+            "specialty": "Visceral Horror",
+        },
+        {
+            "name": "H.P. Lovecraft",
+            "system_prompt": HP_LOVECRAFT + mode_context,
+            "color": "#FF00FF",
+            "specialty": "Cosmic Dread",
+        },
+        {
+            "name": "Jorge Luis Borges",
+            "system_prompt": JORGE_BORGES + mode_context,
+            "color": "#0000FF",
+            "specialty": "Paradox & Infinity",
+        },
+        {
+            "name": "Robert Stack",
+            "system_prompt": ROBERT_STACK + mode_context,
+            "color": "#FFFFFF",
+            "specialty": "Mystery & Investigation",
+        },
+        {
+            "name": "RIP Tequila Bot",
+            "system_prompt": MARKETING_EXEC + mode_context,
+            "color": "#FFFF00",
+            "specialty": "Comic Relief",
+        },
+    ]
+
+
 # =============================================================================
 # MODEL RECOMMENDATIONS
 # =============================================================================
 
-# Default model for all agents (free tier on OpenRouter)
-DEFAULT_MODEL = "nvidia/llama-3.1-nemotron-70b-instruct:free"
+# Default model for all agents. Keep this stable unless the user explicitly asks
+# to change it, because prompt tuning and transcript behavior depend on it.
+DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
 
 RECOMMENDED_MODELS = {
     "rod_serling": DEFAULT_MODEL,

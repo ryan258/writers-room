@@ -9,29 +9,61 @@ a shared "Center Table" to create unforgettably potent stories.
 import os
 import sys
 import argparse
+import json
+import re
 from datetime import datetime
-from colorama import init, Fore, Style
+from urllib import error as urllib_error
+from urllib import request as urllib_request
+
+try:
+    from colorama import init, Fore, Style
+except ImportError:  # pragma: no cover - exercised in thin local installs
+    def init(*args, **kwargs):
+        return None
+
+    class _ColorFallback:
+        BLACK = ""
+        BLUE = ""
+        CYAN = ""
+        GREEN = ""
+        MAGENTA = ""
+        RED = ""
+        WHITE = ""
+        YELLOW = ""
+        RESET_ALL = ""
+
+    Fore = _ColorFallback()
+    Style = _ColorFallback()
 
 from lib.agents import Agent
 from lib.story_state import StoryStateManager
 from lib.personalities import (
-    ROD_SERLING,
-    STEPHEN_KING,
-    HP_LOVECRAFT,
-    JORGE_BORGES,
-    ROBERT_STACK,
-    MARKETING_EXEC,
     PRODUCER,
-    RECOMMENDED_MODELS,
     STORY_MODES,
     DEFAULT_MODEL,
-    build_agent_prompt,
-    get_mode_prompt_context,
-    get_producer_mode_criteria
+    get_agent_roster,
+    get_producer_mode_criteria,
+    get_session_opening_prompt,
+    is_dnd_mode,
+)
+from lib.session_briefing import render_session_brief
+from lib.session_turns import (
+    build_dnd_story_context,
+    generate_dnd_turn,
 )
 
 # Initialize colorama for cross-platform colored terminal output
 init(autoreset=True)
+
+CLI_COLOR_BY_HEX = {
+    "#00FFFF": Fore.CYAN,
+    "#FF0000": Fore.RED,
+    "#FF00FF": Fore.MAGENTA,
+    "#0000FF": Fore.BLUE,
+    "#FFFFFF": Fore.WHITE,
+    "#FFFF00": Fore.YELLOW,
+    "#98C379": Fore.GREEN,
+}
 
 
 def print_banner():
@@ -77,32 +109,49 @@ def save_transcript(prompt: str, conversation_history: list, story_state=None, f
 
     with open(filename, 'w') as f:
         f.write("="*60 + "\n")
-        f.write("WRITERS ROOM TRANSCRIPT\n")
+        if story_state and is_dnd_mode(story_state.mode):
+            f.write("WRITERS ROOM D&D TABLE TRANSCRIPT\n")
+        else:
+            f.write("WRITERS ROOM TRANSCRIPT\n")
         f.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         if story_state:
             f.write(f"Mode: {story_state.mode.upper()}\n")
             f.write(f"Final Act: {story_state.current_act.name}\n")
             f.write(f"Word Count: {story_state.word_count}\n")
         f.write("="*60 + "\n\n")
-        f.write(f"INITIAL PROMPT: {prompt}\n\n")
-        f.write("-"*60 + "\n\n")
 
-        for msg in conversation_history:
-            if msg['role'] == 'user':
-                f.write(f"[USER]: {msg['content']}\n\n")
-            elif msg['role'] == 'assistant':
+        if story_state and is_dnd_mode(story_state.mode):
+            f.write(f"ADVENTURE HOOK: {prompt}\n\n")
+            current_round = None
+            for msg in conversation_history:
+                if msg["role"] != "assistant":
+                    continue
+                msg_round = msg.get("round")
+                if msg_round != current_round:
+                    current_round = msg_round
+                    f.write("-" * 60 + "\n")
+                    f.write(f"ROUND {current_round}\n")
+                    f.write("-" * 60 + "\n\n")
                 f.write(f"{msg.get('name', 'AGENT')}: {msg['content']}\n\n")
+        else:
+            f.write(f"INITIAL PROMPT: {prompt}\n\n")
+            f.write("-"*60 + "\n\n")
 
-        f.write("-"*60 + "\n")
-        f.write("END OF TRANSCRIPT\n")
+            for msg in conversation_history:
+                if msg['role'] == 'user':
+                    f.write(f"[USER]: {msg['content']}\n\n")
+                elif msg['role'] == 'assistant':
+                    f.write(f"{msg.get('name', 'AGENT')}: {msg['content']}\n\n")
+
+            f.write("-"*60 + "\n")
+            f.write("END OF TRANSCRIPT\n")
 
     print(f"{Fore.CYAN}Transcript saved to: {filename}")
+    return filename
 
 
 def validate_api_key():
     """Validate that the OpenRouter API key works."""
-    from openai import OpenAI
-
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         return False, "OPENROUTER_API_KEY not found in environment"
@@ -110,42 +159,46 @@ def validate_api_key():
     if not api_key.startswith("sk-or-"):
         return False, "API key format appears invalid (should start with 'sk-or-')"
 
-    # Try a minimal API call to validate the key
+    request = urllib_request.Request(
+        "https://openrouter.ai/api/v1/key",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
+
     try:
-        client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=api_key,
-        )
-
-        # Make a minimal request to test authentication
-        response = client.chat.completions.create(
-            model=DEFAULT_MODEL,
-            messages=[{"role": "user", "content": "test"}],
-            max_tokens=1
-        )
-
-        # Only return True if we actually got a response
-        if response and response.choices:
-            return True, "API key validated successfully"
-        else:
-            return False, "Unexpected API response format"
-
-    except Exception as e:
-        error_str = str(e)
-        # Check for specific known error types
-        if "401" in error_str or "authentication" in error_str.lower() or "unauthorized" in error_str.lower():
+        with urllib_request.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib_error.HTTPError as exc:
+        if exc.code == 401:
             return False, "API key is invalid or expired"
-        elif "429" in error_str or "rate limit" in error_str.lower():
+        if exc.code == 429:
             return False, "Rate limited - your API key may need credits"
-        elif "404" in error_str or "not found" in error_str.lower():
-            return False, "API endpoint not found - check OpenRouter URL"
-        elif "timeout" in error_str.lower() or "timed out" in error_str.lower():
+        if exc.code == 404:
+            return False, "OpenRouter key endpoint was not found"
+        return False, f"OpenRouter validation failed ({exc.code})"
+    except urllib_error.URLError as exc:
+        reason = str(exc.reason)
+        if "timed out" in reason.lower():
             return False, "Connection timeout - check your internet connection"
-        elif "connection" in error_str.lower() or "network" in error_str.lower():
-            return False, "Network error - check your internet connection"
-        else:
-            # Unknown error - fail safely and show the error
-            return False, f"Validation failed: {error_str[:150]}"
+        return False, f"Network error - {reason}"
+    except Exception as exc:
+        return False, f"Validation failed: {str(exc)[:150]}"
+
+    data = payload.get("data", {})
+    if not data:
+        return False, "Unexpected API response format"
+
+    limit_remaining = data.get("limit_remaining")
+    try:
+        if limit_remaining is not None and float(limit_remaining) <= 0:
+            return True, "Warning: API key is valid, but the current account limit is exhausted."
+    except (TypeError, ValueError):
+        pass
+
+    return True, "API key validated successfully"
 
 
 def parse_producer_scores(producer_response: str, agent_names: list) -> dict:
@@ -286,8 +339,11 @@ def display_story_state(story_manager: StoryStateManager):
     print(f"{Fore.MAGENTA}Mode: {state.mode.upper()} | Act: {state.current_act.name} | Tension: {state.tension_level}/10")
     if state.themes:
         print(f"{Fore.MAGENTA}Themes: {', '.join(state.themes[:3])}")
-    needs = state.get_story_needs()
-    if needs:
+    if is_dnd_mode(state.mode):
+        active_threads = state.get_active_threads()
+        print(f"{Fore.MAGENTA}Open Threads: {len(active_threads)} | Words: {state.word_count}")
+    else:
+        needs = state.get_story_needs()
         print(f"{Fore.MAGENTA}Story needs: {needs[0]}")
     print(f"{Fore.MAGENTA}{'='*60}\n")
 
@@ -329,16 +385,33 @@ def run_single_round(
         # Get story context for this agent if available
         story_context = None
         if story_manager:
-            story_context = story_manager.state.to_prompt_context()
+            if is_dnd_mode(story_manager.state.mode):
+                story_context = build_dnd_story_context(
+                    story_manager,
+                    conversation_history,
+                    display_name,
+                    round_num,
+                )
+            else:
+                story_context = story_manager.state.to_prompt_context()
 
-        response = agent.generate_response(conversation_history, story_context=story_context)
+        if story_manager and is_dnd_mode(story_manager.state.mode):
+            response = generate_dnd_turn(
+                agent,
+                conversation_history,
+                story_context or "",
+                display_name,
+            )
+        else:
+            response = agent.generate_response(conversation_history, story_context=story_context)
         print_agent_response(display_name, response, color)
 
         # Add to conversation history
         conversation_history.append({
             "role": "assistant",
             "content": response,
-            "name": display_name
+            "name": display_name,
+            "round": round_num,
         })
 
         # Update story state
@@ -439,7 +512,7 @@ def parse_args():
         type=str,
         choices=list(STORY_MODES.keys()),
         default=None,
-        help="Story mode (horror, noir, comedy, sci-fi, literary, fantasy)"
+        help="Story mode (horror, noir, comedy, sci-fi, literary, fantasy, dnd)"
     )
     parser.add_argument(
         "--no-continue",
@@ -518,60 +591,17 @@ def main():
     print(f"\n{Fore.MAGENTA}Story Mode: {mode_info['name']}")
     print(f"{Fore.MAGENTA}{mode_info['atmosphere']}\n")
 
-    # Initialize the six agents
+    # Initialize the session roster
     print(f"{Fore.CYAN}Initializing collaborative writers room...\n")
 
     # Use model and temperature overrides if provided
     model_override = args.model or DEFAULT_MODEL
     temperature = args.temperature if args.temperature is not None else 0.9
 
-    # Get mode-specific context for prompts
-    mode_context = get_mode_prompt_context(story_mode)
+    agent_roster = get_agent_roster(story_mode)
 
-    agent_serling = Agent(
-        name="Rod Serling",
-        model=model_override,
-        system_prompt=ROD_SERLING + mode_context,
-        temperature=temperature
-    )
-
-    agent_king = Agent(
-        name="Stephen King",
-        model=model_override,
-        system_prompt=STEPHEN_KING + mode_context,
-        temperature=temperature
-    )
-
-    agent_lovecraft = Agent(
-        name="H.P. Lovecraft",
-        model=model_override,
-        system_prompt=HP_LOVECRAFT + mode_context,
-        temperature=temperature
-    )
-
-    agent_borges = Agent(
-        name="Jorge Luis Borges",
-        model=model_override,
-        system_prompt=JORGE_BORGES + mode_context,
-        temperature=temperature
-    )
-
-    agent_stack = Agent(
-        name="Robert Stack",
-        model=model_override,
-        system_prompt=ROBERT_STACK + mode_context,
-        temperature=temperature
-    )
-
-    agent_rip = Agent(
-        name="RIP Tequila Bot",
-        model=model_override,
-        system_prompt=MARKETING_EXEC + mode_context,
-        temperature=temperature
-    )
-
-    # The Producer Agent (unless disabled)
-    producer_enabled = not args.no_producer
+    # The Producer is intentionally disabled for CLI D&D mode.
+    producer_enabled = not args.no_producer and not is_dnd_mode(story_mode)
     agent_producer = None
     if producer_enabled:
         producer_prompt = PRODUCER + f"\n\nMode-specific focus: {get_producer_mode_criteria(story_mode)}"
@@ -583,33 +613,38 @@ def main():
             max_tokens=300     # Producer needs more tokens to evaluate all 6 agents
         )
 
-    agents = [
-        (agent_serling, Fore.CYAN, "Rod Serling"),
-        (agent_king, Fore.RED, "Stephen King"),
-        (agent_lovecraft, Fore.MAGENTA, "H.P. Lovecraft"),
-        (agent_borges, Fore.BLUE, "Jorge Luis Borges"),
-        (agent_stack, Fore.WHITE, "Robert Stack"),
-        (agent_rip, Fore.YELLOW, "RIP Tequila Bot")
-    ]
+    agents = []
+    for spec in agent_roster:
+        max_tokens = 80
+        window_size = 15
+        if is_dnd_mode(story_mode):
+            max_tokens = 120 if spec["name"] == "Dungeon Master" else 90
+            window_size = 8
+        agents.append(
+            (
+                Agent(
+                    name=spec["name"],
+                    model=model_override,
+                    system_prompt=spec["system_prompt"],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    window_size=window_size,
+                ),
+                CLI_COLOR_BY_HEX.get(spec["color"], Fore.WHITE),
+                spec["name"],
+            )
+        )
 
     # Initialize scoring system
-    agent_scores = {
-        "Rod Serling": [],
-        "Stephen King": [],
-        "H.P. Lovecraft": [],
-        "Jorge Luis Borges": [],
-        "Robert Stack": [],
-        "RIP Tequila Bot": []
-    }
+    agent_scores = {spec["name"]: [] for spec in agent_roster}
 
-    print(f"{Fore.CYAN}+ Rod Serling (Irony & Moral Complexity)")
-    print(f"{Fore.RED}+ Stephen King (Visceral Horror)")
-    print(f"{Fore.MAGENTA}+ H.P. Lovecraft (Cosmic Dread)")
-    print(f"{Fore.BLUE}+ Jorge Luis Borges (Paradox & Infinity)")
-    print(f"{Fore.WHITE}+ Robert Stack (Mystery & Investigation)")
-    print(f"{Fore.YELLOW}+ RIP Tequila Bot (Comic Relief)")
+    for spec in agent_roster:
+        color = CLI_COLOR_BY_HEX.get(spec["color"], Fore.WHITE)
+        print(f"{color}+ {spec['name']} ({spec['specialty']})")
     if producer_enabled:
         print(f"{Fore.GREEN}+ The Producer (Quality Evaluation)")
+    elif is_dnd_mode(story_mode):
+        print(f"{Fore.YELLOW}+ D&D mode runs without The Producer, leaderboard scoring, or story-needs prompts")
 
     print(f"\n{Fore.YELLOW}Model: {model_override}")
 
@@ -645,7 +680,7 @@ def main():
 
     # Initialize conversation history
     conversation_history = [
-        {"role": "user", "content": f"Write a scene about: {user_prompt}"}
+        {"role": "user", "content": get_session_opening_prompt(story_mode, user_prompt)}
     ]
 
     # Run rounds of collaboration
@@ -741,7 +776,36 @@ def main():
                 print(f"{Fore.RED}{'='*60}\n")
 
     # Save transcript with story state
-    save_transcript(user_prompt, conversation_history, story_state=story_manager.state)
+    transcript_path = save_transcript(
+        user_prompt,
+        conversation_history,
+        story_state=story_manager.state,
+    )
+
+    final_averages = []
+    for agent_name, scores in agent_scores.items():
+        if scores:
+            avg_score = sum(scores) / len(scores)
+            final_averages.append((agent_name, avg_score, scores))
+    final_averages.sort(key=lambda item: item[1], reverse=True)
+    leaderboard = [
+        {
+            "name": name,
+            "average": round(avg_score, 1),
+            "scores": scores,
+        }
+        for name, avg_score, scores in final_averages
+    ]
+    brief_path = render_session_brief(
+        prompt=user_prompt,
+        mode=story_mode,
+        story_state=story_manager.state,
+        conversation_history=conversation_history,
+        leaderboard=leaderboard,
+        transcript_path=transcript_path,
+    )
+    if brief_path:
+        print(f"{Fore.CYAN}Session brief saved to: {brief_path}")
 
     print(f"\n{Fore.GREEN}The story is complete. Thank you for writing!\n")
 

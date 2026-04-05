@@ -11,11 +11,16 @@ from .story_state import StoryStateManager
 from .agents import Agent
 from .custom_agents import CustomAgentManager
 from .personalities import (
-    ROD_SERLING, STEPHEN_KING, HP_LOVECRAFT, JORGE_BORGES, 
-    ROBERT_STACK, MARKETING_EXEC, PRODUCER, 
-    DEFAULT_MODEL, STORY_MODES, get_mode_prompt_context,
-    get_producer_mode_criteria
+    PRODUCER,
+    DEFAULT_MODEL,
+    STORY_MODES,
+    get_agent_roster,
+    get_producer_mode_criteria,
+    get_session_opening_prompt,
+    is_dnd_mode,
 )
+from .session_briefing import render_session_brief
+from .session_turns import build_dnd_story_context, generate_dnd_turn, generate_story_turn
 
 # Optional voice support
 try:
@@ -127,11 +132,19 @@ class SessionOrchestrator:
         self.stop_event.clear()
         self.producer_feedback = []
         self.transcript_path = None
-        self.conversation_history = [
-            {"role": "user", "content": f"Write a scene about: {prompt}"}
-        ]
-        
+        self.brief_path = None
         story_mode = config.get('mode', 'horror')
+        if is_dnd_mode(story_mode):
+            self.config['include_custom_agents'] = False
+            self.config['producer_enabled'] = False
+
+        opening_prompt = get_session_opening_prompt(story_mode, prompt)
+        notes = (config.get("notes") or "").strip()
+        if notes:
+            opening_prompt = f"{opening_prompt}\n\nCreative brief: {notes}"
+
+        self.conversation_history = [{"role": "user", "content": opening_prompt}]
+
         self.story_manager = StoryStateManager(premise=prompt, mode=story_mode)
         
         self.agents, self.producer = self._initialize_agents(config)
@@ -144,7 +157,8 @@ class SessionOrchestrator:
             'rounds': config.get('rounds', 3),
             'config': config,
             'mode': story_mode,
-            'mode_info': STORY_MODES.get(story_mode, {})
+            'mode_info': STORY_MODES.get(story_mode, {}),
+            'agent_roster': self._get_agent_roster_payload(),
         })
 
     def stop(self):
@@ -156,27 +170,34 @@ class SessionOrchestrator:
         temperature = config.get('temperature', 0.9)
         producer_enabled = config.get('producer_enabled', True)
         story_mode = config.get('mode', 'horror')
-        mode_context = get_mode_prompt_context(story_mode)
         include_custom_agents = config.get('include_custom_agents', True)
         
         agents = []
-        agent_configs = [
-            ('Rod Serling', ROD_SERLING, 'rod_serling', '#00FFFF'),
-            ('Stephen King', STEPHEN_KING, 'stephen_king', '#FF0000'),
-            ('H.P. Lovecraft', HP_LOVECRAFT, 'hp_lovecraft', '#FF00FF'),
-            ('Jorge Luis Borges', JORGE_BORGES, 'jorge_borges', '#0000FF'),
-            ('Robert Stack', ROBERT_STACK, 'robert_stack', '#FFFFFF'),
-            ('RIP Tequila Bot', MARKETING_EXEC, 'marketing', '#FFFF00')
-        ]
-        
-        for name, personality, model_key, color in agent_configs:
+        agent_configs = get_agent_roster(story_mode)
+
+        for agent_config in agent_configs:
+            max_tokens = 80
+            window_size = 15
+            if is_dnd_mode(story_mode):
+                max_tokens = 120 if agent_config['name'] == "Dungeon Master" else 90
+                window_size = 8
             agent = Agent(
-                name=name,
+                name=agent_config['name'],
                 model=model_override,
-                system_prompt=personality + mode_context,
-                temperature=temperature
+                system_prompt=agent_config['system_prompt'],
+                temperature=temperature,
+                max_tokens=max_tokens,
+                window_size=window_size,
             )
-            agents.append({'agent': agent, 'name': name, 'color': color, 'voice_id': None})
+            agents.append(
+                {
+                    'agent': agent,
+                    'name': agent_config['name'],
+                    'color': agent_config['color'],
+                    'specialty': agent_config.get('specialty', ''),
+                    'voice_id': None,
+                }
+            )
 
         # Append active custom agents if requested
         if include_custom_agents:
@@ -186,12 +207,13 @@ class SessionOrchestrator:
                     name=custom.name,
                     model=model_override,
                     system_prompt=custom.to_system_prompt(""),
-                    temperature=temperature
+                    temperature=temperature,
                 )
                 agents.append({
                     'agent': custom_agent,
                     'name': custom.name,
                     'color': custom.color,
+                    'specialty': custom.specialty,
                     'voice_id': custom.voice_id
                 })
             
@@ -229,13 +251,35 @@ class SessionOrchestrator:
                  self.transcript_path = self.save_transcript()
              except Exception as exc:
                  self.emit(SessionEvent.ERROR, {'message': f"Transcript save failed: {exc}"})
+             try:
+                 self.brief_path = render_session_brief(
+                     prompt=self.config.get('prompt', ''),
+                     mode=self.config.get('mode', 'horror'),
+                     story_state=self.story_manager.get_state() if self.story_manager else None,
+                     conversation_history=self.conversation_history,
+                     leaderboard=self._calculate_leaderboard(),
+                     transcript_path=self.transcript_path,
+                 )
+             except Exception:
+                 self.brief_path = None
              self.emit(SessionEvent.SESSION_COMPLETED, self._get_session_summary())
+
+    def _build_story_state_payload(self, state=None):
+         if state is None and self.story_manager:
+             state = self.story_manager.get_state()
+         if state is None:
+             return None
+
+         payload = state.to_dict()
+         payload['open_threads'] = len(state.get_active_threads())
+         payload['story_needs'] = [] if is_dnd_mode(state.mode) else state.get_story_needs()
+         return payload
 
     def _run_round(self, round_num, total_rounds):
          state = self.story_manager.get_state()
          self.emit(SessionEvent.STORY_STATE_UPDATE, {
              'round': round_num,
-             'state': state.to_dict()
+             'state': self._build_story_state_payload(state)
          })
          
          self.emit(SessionEvent.ROUND_STARTED, {'round': round_num, 'total': total_rounds})
@@ -250,18 +294,35 @@ class SessionOrchestrator:
              
              self.emit(SessionEvent.AGENT_THINKING, {'agent': name, 'color': color})
              
-             story_context = self.story_manager.state.to_prompt_context()
-             response = agent.generate_response(
-                 self.conversation_history,
-                 story_context=story_context
-             )
+             if is_dnd_mode(self.story_manager.state.mode):
+                 story_context = build_dnd_story_context(
+                     self.story_manager,
+                     self.conversation_history,
+                     name,
+                     round_num,
+                 )
+                 response = generate_dnd_turn(
+                     agent,
+                     self.conversation_history,
+                     story_context,
+                     name,
+                 )
+             else:
+                 story_context = self.story_manager.state.to_prompt_context()
+                 response = generate_story_turn(
+                     agent,
+                     self.conversation_history,
+                     story_context,
+                     name,
+                 )
              
              self.story_manager.process_contribution(response, name, round_num)
              
              self.conversation_history.append({
                  "role": "assistant",
                  "content": response,
-                 "name": name
+                 "name": name,
+                 "round": round_num,
              })
              
              audio_data = None
@@ -360,6 +421,16 @@ class SessionOrchestrator:
          leaderboard.sort(key=lambda x: x['average'], reverse=True)
          return leaderboard
 
+    def _get_agent_roster_payload(self) -> List[Dict[str, str]]:
+         return [
+             {
+                 'name': agent['name'],
+                 'color': agent['color'],
+                 'specialty': agent.get('specialty', ''),
+             }
+             for agent in self.agents
+         ]
+
     def _finalize_session(self):
          # Logic for final cleanup or stats is handled in get_session_summary for the event
          pass
@@ -378,7 +449,10 @@ class SessionOrchestrator:
 
         with transcript_path.open("w", encoding="utf-8") as handle:
             handle.write("=" * 60 + "\n")
-            handle.write("WRITERS ROOM WEB TRANSCRIPT\n")
+            if self.story_manager and is_dnd_mode(self.story_manager.get_state().mode):
+                handle.write("WRITERS ROOM D&D TABLE TRANSCRIPT\n")
+            else:
+                handle.write("WRITERS ROOM WEB TRANSCRIPT\n")
             handle.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             handle.write(f"Prompt: {prompt}\n")
             handle.write(f"Mode: {self.config.get('mode', 'horror')}\n")
@@ -389,13 +463,27 @@ class SessionOrchestrator:
                 handle.write(f"Word Count: {state.word_count}\n")
             handle.write("=" * 60 + "\n\n")
 
-            for message in self.conversation_history:
-                role = message.get("role")
-                if role == "user":
-                    handle.write(f"[USER] {message.get('content', '')}\n\n")
-                elif role == "assistant":
-                    author = message.get("name", "Agent")
-                    handle.write(f"[{author}] {message.get('content', '')}\n\n")
+            if self.story_manager and is_dnd_mode(self.story_manager.get_state().mode):
+                handle.write(f"ADVENTURE HOOK: {self.config.get('prompt', prompt)}\n\n")
+                current_round = None
+                for message in self.conversation_history:
+                    if message.get("role") != "assistant":
+                        continue
+                    message_round = message.get("round")
+                    if message_round != current_round:
+                        current_round = message_round
+                        handle.write("-" * 60 + "\n")
+                        handle.write(f"ROUND {current_round}\n")
+                        handle.write("-" * 60 + "\n\n")
+                    handle.write(f"{message.get('name', 'Agent')}: {message.get('content', '')}\n\n")
+            else:
+                for message in self.conversation_history:
+                    role = message.get("role")
+                    if role == "user":
+                        handle.write(f"[USER] {message.get('content', '')}\n\n")
+                    elif role == "assistant":
+                        author = message.get("name", "Agent")
+                        handle.write(f"[{author}] {message.get('content', '')}\n\n")
 
             if self.producer_feedback:
                 handle.write("-" * 60 + "\n")
@@ -416,12 +504,13 @@ class SessionOrchestrator:
         leaderboard = self._calculate_leaderboard()
         winner = leaderboard[0] if leaderboard else None
         worst = leaderboard[-1] if len(leaderboard) > 1 and self.config.get('fire_worst', False) else None
-        final_state = self.story_manager.get_state()
+        final_state = self._build_story_state_payload()
         
         return {
             'leaderboard': leaderboard,
             'winner': winner,
             'worst': worst,
-            'story_state': final_state.to_dict(),
+            'story_state': final_state,
             'transcript_path': self.transcript_path,
+            'brief_path': getattr(self, 'brief_path', None),
         }

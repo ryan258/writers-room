@@ -16,7 +16,12 @@ elif [ -d ".venv" ]; then
 fi
 
 if [ ! -f ".env" ]; then
-  echo "Warning: .env file not found. OPENROUTER_API_KEY must be set before running the CLI."
+  echo "Warning: .env file not found. OPENROUTER_API_KEY must be set before running Writers Room."
 fi
 
-exec python main.py "$@"
+if [ "${1:-}" = "--cli" ]; then
+  shift
+  exec python main.py "$@"
+fi
+
+exec ./start_web.sh "$@"

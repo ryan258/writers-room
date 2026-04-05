@@ -1,4 +1,42 @@
-// Writers Room Web Interface - Client-side JavaScript
+const boot = window.WRITERS_ROOM_BOOT || { modes: {}, defaultMode: "dnd" };
+const modeCatalog = boot.modes || {};
+const modePresets = {
+  dnd: {
+    prompt: "A cursed roller disco opens one last time beneath the city cemetery.",
+    notes:
+      "Keep it spooky, fast, and playable. Give the party concrete tactical choices, physical space to exploit, and one memorable reveal per round.",
+  },
+  horror: {
+    prompt: "The night janitor finds fresh muddy footprints in a locked ballroom no one has opened since the fire.",
+    notes:
+      "Aim for sensory dread and escalation. Keep the prose specific, grounded, and unnervingly patient.",
+  },
+  fantasy: {
+    prompt: "A city built around a sleeping dragon wakes to find its dreams leaking into the streets.",
+    notes:
+      "Lean into wonder, consequence, and coherent magic. Give the room a strong mythic image to chase.",
+  },
+  literary: {
+    prompt: "Two estranged siblings catalog their late mother's house and keep discovering evidence of a life she never confessed.",
+    notes:
+      "Favor interiority, restraint, and loaded detail. Let every turn sharpen character before plot.",
+  },
+  noir: {
+    prompt: "A private investigator takes a missing-person job that arrives with tomorrow's newspaper already folded to the obituary page.",
+    notes:
+      "Work the shadows, bad choices, and quiet menace. Make every clue feel expensive.",
+  },
+  "sci-fi": {
+    prompt: "A lunar emergency operator starts receiving distress calls from a colony that was declared empty twelve years ago.",
+    notes:
+      "Balance the speculative idea with human stakes. Let the room keep the science weird but emotionally legible.",
+  },
+  comedy: {
+    prompt: "A small-town council accidentally elects an eldritch crab as interim mayor and has to keep the budget meeting on track.",
+    notes:
+      "Prioritize timing, escalation, and callbacks. Let the absurdity stay disciplined enough to land.",
+  },
+};
 
 let socket = null;
 let sessionActive = false;
@@ -6,9 +44,14 @@ let audioQueue = [];
 let isPlayingAudio = false;
 let reconnectTimer = null;
 let reconnectAttempts = 0;
+let voiceAvailable = true;
+let currentMode = boot.defaultMode || "dnd";
 const MAX_RECONNECT_DELAY_MS = 5000;
 
-// Initialize WebSocket connection
+function currentModeInfo() {
+  return modeCatalog[currentMode] || modeCatalog.horror || {};
+}
+
 function initSocket() {
   if (
     socket &&
@@ -19,18 +62,16 @@ function initSocket() {
   }
 
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  const wsUrl = `${protocol}://${window.location.host}/ws`;
-  socket = new WebSocket(wsUrl);
+  socket = new WebSocket(`${protocol}://${window.location.host}/ws`);
 
   socket.addEventListener("open", () => {
-    console.log("Connected to server");
     reconnectAttempts = 0;
     if (reconnectTimer) {
       window.clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
     if (sessionActive) {
-      updateStatusBanner(true, "Connection restored. Waiting for live updates...");
+      updateStatusBanner(true, "Session live", "Connection restored. Waiting for fresh beats.");
     }
     rehydrateSessionState();
   });
@@ -41,18 +82,14 @@ function initSocket() {
       if (message && message.event) {
         handleEvent(message.event, message.data || {});
       }
-    } catch (err) {
-      console.error("WebSocket message parse failed:", err);
+    } catch (error) {
+      console.error("WebSocket message parse failed:", error);
     }
   });
 
-  socket.addEventListener("close", () => {
-    console.log("Disconnected from server");
-    scheduleReconnect();
-  });
-
-  socket.addEventListener("error", (err) => {
-    console.error("WebSocket error:", err);
+  socket.addEventListener("close", scheduleReconnect);
+  socket.addEventListener("error", (error) => {
+    console.error("WebSocket error:", error);
   });
 }
 
@@ -67,7 +104,8 @@ function scheduleReconnect() {
   if (sessionActive) {
     updateStatusBanner(
       true,
-      `Connection lost. Reconnecting in ${Math.round(delay / 1000)}s...`,
+      "Connection dropped",
+      `Reconnecting in ${Math.round(delay / 1000)}s...`,
     );
   }
 
@@ -77,12 +115,27 @@ function scheduleReconnect() {
   }, delay);
 }
 
-function showSessionNote(message) {
+function showSessionNote(message, linkHref = null, linkLabel = "Open") {
   const note = document.getElementById("session-note");
   if (!note) {
     return;
   }
-  note.textContent = message;
+
+  note.textContent = "";
+  const messageNode = document.createElement("span");
+  messageNode.textContent = message;
+  note.appendChild(messageNode);
+
+  if (linkHref) {
+    note.appendChild(document.createTextNode(" "));
+    const link = document.createElement("a");
+    link.href = linkHref;
+    link.textContent = linkLabel;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    note.appendChild(link);
+  }
+
   note.classList.remove("hidden");
 }
 
@@ -102,224 +155,14 @@ function setStartButtonState(active) {
   }
 
   startBtn.disabled = active;
-  startBtn.textContent = active ? "Session Running..." : "Start Writers Room";
-}
-
-async function rehydrateSessionState() {
-  try {
-    const response = await fetch("/api/status");
-    if (!response.ok) {
-      throw new Error(`Status request failed with ${response.status}`);
-    }
-
-    const status = await response.json();
-    sessionActive = Boolean(status.active);
-
-    if (sessionActive) {
-      setStartButtonState(true);
-      updateStatusBanner(true, "Session in progress. Waiting for live updates...");
-
-      if (status.config && status.config.producer_enabled) {
-        document.getElementById("agent-the-producer").classList.remove("hidden");
-      }
-      if (status.story_state) {
-        updateStoryStatePanel(status.story_state);
-      }
-      clearSessionNote();
-      return;
-    }
-
-    setStartButtonState(false);
-    updateStatusBanner(false);
-
-    if (status.last_transcript) {
-      showSessionNote(`Transcript saved to ${status.last_transcript}`);
-    } else {
-      clearSessionNote();
-    }
-  } catch (error) {
-    console.error("Failed to rehydrate session state:", error);
+  if (active) {
+    startBtn.innerHTML = '<span class="spinner"></span> Launching...';
+    return;
   }
+
+  startBtn.textContent = currentMode === "dnd" ? "Launch the table" : "Start the room";
 }
 
-function handleEvent(eventName, data) {
-  switch (eventName) {
-    case "connected":
-      console.log("Server acknowledged connection:", data);
-      break;
-    case "session_started":
-      console.log("Session started:", data);
-      sessionActive = true;
-      clearSessionNote();
-      updateStatusBanner(true, `Round 1 of ${data.rounds} starting...`);
-      document.getElementById("story-state-panel").classList.remove("hidden");
-      if (data.mode_info) {
-        document.getElementById("state-mode").textContent =
-          data.mode_info.name || data.mode;
-      }
-      if (data.config && data.config.producer_enabled) {
-        document.getElementById("agent-the-producer").classList.remove("hidden");
-      }
-      break;
-    case "story_state_update":
-      console.log("Story state update:", data);
-      updateStoryStatePanel(data.state);
-      break;
-    case "round_started":
-      console.log("Round started:", data);
-      updateStatusBanner(true, `Round ${data.round} of ${data.total}`);
-      break;
-    case "agent_thinking": {
-      console.log("Agent thinking:", data.agent);
-      const { card, status } = ensureAgentCard(data.agent, data.color);
-      if (card) {
-        card.classList.add("thinking");
-      }
-      if (status) {
-        status.innerHTML = '<span class="spinner"></span> Thinking...';
-      }
-      break;
-    }
-    case "agent_response": {
-      console.log("Agent response:", data.agent, data.response);
-      const { card, status, responsesDiv } = ensureAgentCard(
-        data.agent,
-        data.color,
-      );
-
-      if (card) {
-        card.classList.remove("thinking");
-      }
-      if (status) {
-        status.textContent = `Round ${data.round}`;
-      }
-      if (responsesDiv) {
-        const placeholder = responsesDiv.querySelector(".placeholder-text");
-        if (placeholder) {
-          responsesDiv.innerHTML = "";
-        }
-
-        const responseItem = document.createElement("div");
-        responseItem.className = "response-item";
-        responseItem.style.borderLeftColor = data.color;
-
-        const roundLabel = document.createElement("div");
-        roundLabel.className = "response-round";
-        roundLabel.textContent = `Round ${data.round}`;
-
-        const responseText = document.createElement("div");
-        responseText.className = "response-text";
-        responseText.textContent = data.response;
-
-        responseItem.appendChild(roundLabel);
-        responseItem.appendChild(responseText);
-        responsesDiv.appendChild(responseItem);
-        responsesDiv.scrollTop = responsesDiv.scrollHeight;
-      }
-
-      if (data.audio) {
-        queueAudio({ data: data.audio, mime: data.audio_mime });
-      }
-      break;
-    }
-    case "producer_thinking": {
-      console.log("Producer thinking...");
-      const card = document.getElementById("agent-the-producer");
-      const status = document.getElementById("status-the-producer");
-      if (card) {
-        card.classList.add("thinking");
-      }
-      if (status) {
-        status.innerHTML = '<span class="spinner"></span> Judging...';
-      }
-      updateStatusBanner(true, `The Producer is evaluating Round ${data.round}...`);
-      break;
-    }
-    case "producer_verdict": {
-      console.log("Producer verdict:", data);
-      const card = document.getElementById("agent-the-producer");
-      const status = document.getElementById("status-the-producer");
-      const responsesDiv = document.getElementById("responses-the-producer");
-
-      if (card) {
-        card.classList.remove("thinking");
-      }
-      if (status) {
-        status.textContent = `Round ${data.round}`;
-      }
-      if (responsesDiv) {
-        const placeholder = responsesDiv.querySelector(".placeholder-text");
-        if (placeholder) {
-          responsesDiv.innerHTML = "";
-        }
-
-        const responseItem = document.createElement("div");
-        responseItem.className = "response-item producer-response";
-
-        const roundLabel = document.createElement("div");
-        roundLabel.className = "response-round";
-        roundLabel.textContent = `Round ${data.round} Verdict`;
-
-        const responseText = document.createElement("div");
-        responseText.className = "response-text";
-        responseText.textContent = data.response;
-
-        responseItem.appendChild(roundLabel);
-        responseItem.appendChild(responseText);
-        responsesDiv.appendChild(responseItem);
-        responsesDiv.scrollTop = responsesDiv.scrollHeight;
-      }
-
-      updateLeaderboard(data.leaderboard);
-
-      if (data.audio) {
-        queueAudio({ data: data.audio, mime: data.audio_mime });
-      }
-      break;
-    }
-    case "round_completed":
-      console.log("Round completed:", data.round);
-      break;
-    case "session_completed": {
-      console.log("Session completed:", data);
-      sessionActive = false;
-      updateStatusBanner(false);
-      if (data.transcript_path) {
-        showSessionNote(`Transcript saved to ${data.transcript_path}`);
-      }
-
-      if (data.story_state) {
-        updateStoryStatePanel(data.story_state);
-      }
-      if (data.winner) {
-        showWinner(data.winner);
-      }
-      if (data.worst) {
-        showFired(data.worst);
-      }
-
-      const startBtn = document.getElementById("start-btn");
-      startBtn.disabled = false;
-      startBtn.textContent = "Start Writers Room";
-      break;
-    }
-    case "error": {
-      console.error("Error:", data.message);
-      alert("Error: " + data.message);
-      sessionActive = false;
-      updateStatusBanner(false);
-      showSessionNote(`Session error: ${data.message}`);
-
-      const startBtn = document.getElementById("start-btn");
-      startBtn.disabled = false;
-      startBtn.textContent = "Start Writers Room";
-      break;
-    }
-    default:
-      console.log("Unhandled event:", eventName, data);
-  }
-}
-// Normalize agent name to valid ID
 function normalizeAgentId(agentName) {
   return agentName
     .toLowerCase()
@@ -327,137 +170,335 @@ function normalizeAgentId(agentName) {
     .replace(/^-+|-+$/g, "");
 }
 
-function ensureAgentCard(agentName, color) {
+function ensureAgentCard(agentName, color, specialty = "Agent") {
+  const grid = document.getElementById("agent-grid");
+  const emptyRoster = grid.querySelector(".empty-roster");
+  if (emptyRoster) {
+    grid.innerHTML = "";
+  }
   const agentId = normalizeAgentId(agentName);
   let card = document.getElementById(`agent-${agentId}`);
-  if (card) {
-    return {
-      card,
-      status: document.getElementById(`status-${agentId}`),
-      responsesDiv: document.getElementById(`responses-${agentId}`),
-    };
-  }
+  if (!card) {
+    card = document.createElement("article");
+    card.className = "agent-card";
+    card.id = `agent-${agentId}`;
 
-  const grid = document.getElementById("agent-grid");
-  card = document.createElement("div");
-  card.className = "agent-card custom-agent";
-  card.id = `agent-${agentId}`;
+    const header = document.createElement("div");
+    header.className = "agent-header";
 
-  const header = document.createElement("div");
-  header.className = "agent-header";
+    const identity = document.createElement("div");
+    identity.className = "agent-identity";
 
-  const nameEl = document.createElement("div");
-  nameEl.className = "agent-name text-cyan";
-  nameEl.textContent = agentName;
+    const nameEl = document.createElement("div");
+    nameEl.className = "agent-name";
+    nameEl.id = `name-${agentId}`;
 
-  const specialty = document.createElement("div");
-  specialty.className = "agent-specialty";
-  specialty.textContent = "Custom Agent";
+    const specialtyEl = document.createElement("div");
+    specialtyEl.className = "agent-specialty";
+    specialtyEl.id = `specialty-${agentId}`;
 
-  const status = document.createElement("div");
-  status.className = "agent-status";
-  status.id = `status-${agentId}`;
-  status.textContent = "Waiting...";
+    identity.appendChild(nameEl);
+    identity.appendChild(specialtyEl);
 
-  header.appendChild(nameEl);
-  header.appendChild(specialty);
-  header.appendChild(status);
+    const status = document.createElement("div");
+    status.className = "agent-status";
+    status.id = `status-${agentId}`;
+    status.textContent = "Waiting";
 
-  const responsesDiv = document.createElement("div");
-  responsesDiv.className = "agent-responses";
-  responsesDiv.id = `responses-${agentId}`;
-  responsesDiv.innerHTML = '<p class="placeholder-text">Waiting...</p>';
+    header.appendChild(identity);
+    header.appendChild(status);
 
-  card.appendChild(header);
-  card.appendChild(responsesDiv);
-  if (grid) {
+    const responsesDiv = document.createElement("div");
+    responsesDiv.className = "agent-responses";
+    responsesDiv.id = `responses-${agentId}`;
+    responsesDiv.innerHTML =
+      '<p class="placeholder-text">This seat is ready when the session begins.</p>';
+
+    card.appendChild(header);
+    card.appendChild(responsesDiv);
     grid.appendChild(card);
   }
 
+  const nameEl = document.getElementById(`name-${agentId}`);
+  const specialtyEl = document.getElementById(`specialty-${agentId}`);
+  const status = document.getElementById(`status-${agentId}`);
+  const responsesDiv = document.getElementById(`responses-${agentId}`);
+
+  nameEl.textContent = agentName;
+  specialtyEl.textContent = specialty;
   if (color) {
-    card.style.borderColor = color;
+    card.style.setProperty("--agent-accent", color);
+    nameEl.style.color = color;
   }
 
   return { card, status, responsesDiv };
 }
 
-// Update status banner
-function updateStatusBanner(active, message = "") {
+function renderRosterPlaceholder() {
+  const grid = document.getElementById("agent-grid");
+  if (!grid) {
+    return;
+  }
+  grid.innerHTML = `
+    <div class="empty-roster">
+      <h3>The room is empty.</h3>
+      <p>Launch a session to seat the DM, the players, or the author roster.</p>
+    </div>
+  `;
+}
+
+function applyAgentRoster(agentRoster) {
+  if (!Array.isArray(agentRoster) || agentRoster.length === 0) {
+    renderRosterPlaceholder();
+    return;
+  }
+
+  const grid = document.getElementById("agent-grid");
+  grid.innerHTML = "";
+
+  agentRoster.forEach((entry) => {
+    ensureAgentCard(entry.name, entry.color, entry.specialty || "Agent");
+  });
+}
+
+function clearActivityFeed() {
+  const feed = document.getElementById("activity-feed");
+  if (!feed) {
+    return;
+  }
+  feed.innerHTML = `
+    <div class="empty-state">
+      <h3>Nothing rolling yet.</h3>
+      <p>When the room starts, scene beats, player actions, and verdicts will stack here live.</p>
+    </div>
+  `;
+}
+
+function appendFeedEntry(kind, title, body, meta = "") {
+  const feed = document.getElementById("activity-feed");
+  if (!feed) {
+    return;
+  }
+
+  const emptyState = feed.querySelector(".empty-state");
+  if (emptyState) {
+    feed.innerHTML = "";
+  }
+
+  const item = document.createElement("article");
+  item.className = `feed-item feed-item--${kind}`;
+
+  const itemTitle = document.createElement("h3");
+  itemTitle.textContent = title;
+
+  const itemBody = document.createElement("p");
+  itemBody.textContent = body;
+
+  item.appendChild(itemTitle);
+  item.appendChild(itemBody);
+
+  if (meta) {
+    const itemMeta = document.createElement("div");
+    itemMeta.className = "feed-meta";
+    itemMeta.textContent = meta;
+    item.appendChild(itemMeta);
+  }
+
+  feed.prepend(item);
+}
+
+function updateStatusBanner(active, title = "", detail = "") {
   const banner = document.getElementById("status-banner");
-  const detail = document.getElementById("status-detail");
+  const titleEl = document.getElementById("status-title");
+  const detailEl = document.getElementById("status-detail");
+
+  if (!banner || !titleEl || !detailEl) {
+    return;
+  }
 
   if (active) {
     banner.classList.add("active");
-    if (message) {
-      detail.textContent = message;
-    }
+    titleEl.textContent = title || "Session live";
+    detailEl.textContent = detail || "The room is working.";
+    return;
+  }
+
+  banner.classList.remove("active");
+  titleEl.textContent = "Studio idle";
+  detailEl.textContent = "Choose a mode, frame the premise, and launch the room.";
+}
+
+function syncProducerControls() {
+  const producerEnabled = document.getElementById("producer-enabled");
+  const fireWorst = document.getElementById("fire-worst");
+
+  if (!producerEnabled || !fireWorst) {
+    return;
+  }
+
+  if (producerEnabled.disabled || !producerEnabled.checked) {
+    fireWorst.checked = false;
+    fireWorst.disabled = true;
   } else {
-    banner.classList.remove("active");
+    fireWorst.disabled = false;
   }
 }
 
-// Update story state panel
+function applyModeCopy() {
+  const info = currentModeInfo();
+  const promptLabel = document.getElementById("prompt-label");
+  const notesLabel = document.getElementById("notes-label");
+  const prompt = document.getElementById("prompt");
+  const notes = document.getElementById("notes");
+  const loadExampleBtn = document.getElementById("load-example-btn");
+
+  document.getElementById("mode-brief-title").textContent = info.name || "Mode";
+  document.getElementById("mode-brief-description").textContent =
+    info.description || "";
+  document.getElementById("mode-brief-atmosphere").textContent =
+    info.atmosphere || "";
+  document.getElementById("mode-brief-pacing").textContent = info.pacing || "";
+  document.getElementById("mode-brief-criteria").textContent =
+    info.producer_criteria || "";
+
+  document.getElementById("feed-title").textContent =
+    currentMode === "dnd" ? "Encounter Reel" : "Draft Reel";
+  document.getElementById("feed-subtitle").textContent =
+    currentMode === "dnd"
+      ? "Scene framing, party declarations, and fallout stack here in order."
+      : "Each contribution lands here so you can track momentum without losing the room.";
+  document.getElementById("roster-title").textContent =
+    currentMode === "dnd" ? "Seats at the Table" : "Seats in the Room";
+  document.getElementById("roster-subtitle").textContent =
+    currentMode === "dnd"
+      ? "DM and party roles appear here once the session launches."
+      : "Each writer keeps an individual lane so you can see who is building and who is stalling.";
+  document.getElementById("state-heading").textContent =
+    currentMode === "dnd" ? "Encounter Pressure" : "Center Table State";
+  document.getElementById("state-subtitle").textContent =
+    currentMode === "dnd"
+      ? "What the table knows, how hot the scene is, and what pressure is still live."
+      : "Shared pressure, pace, and the next thing the story still needs.";
+
+  if (currentMode === "dnd") {
+    promptLabel.textContent = "Adventure hook";
+    notesLabel.textContent = "Table brief";
+    prompt.placeholder =
+      "A haunted roller disco opens one last time beneath the city cemetery.";
+    notes.placeholder =
+      "Desired vibe, encounter rules, set pieces, monsters, or the kind of choices the party should face.";
+    loadExampleBtn.textContent = "Load an adventure spark";
+  } else {
+    promptLabel.textContent = "Core premise";
+    notesLabel.textContent = "Creative brief";
+    prompt.placeholder =
+      "A locked room, a bad secret, and the one person who knows why the lights keep going out.";
+    notes.placeholder =
+      "Voice, constraints, emotional target, craft goals, or what the Producer should be ruthless about.";
+    loadExampleBtn.textContent = "Load a writing spark";
+  }
+}
+
+function updateModeSelection(mode) {
+  currentMode = modeCatalog[mode] ? mode : boot.defaultMode || "dnd";
+
+  document.getElementById("mode").value = currentMode;
+
+  document.querySelectorAll(".mode-card").forEach((card) => {
+    card.classList.toggle("is-active", card.dataset.mode === currentMode);
+  });
+
+  const producerEnabled = document.getElementById("producer-enabled");
+  const includeCustomAgents = document.getElementById("include-custom-agents");
+  const producerNote = document.getElementById("producer-note");
+  const customAgentNote = document.getElementById("custom-agent-note");
+
+  if (currentMode === "dnd") {
+    producerEnabled.checked = false;
+    producerEnabled.disabled = true;
+    includeCustomAgents.checked = false;
+    includeCustomAgents.disabled = true;
+    producerNote.textContent =
+      "D&D mode runs without the Producer. The DM and party own the pressure without an external judge.";
+    customAgentNote.textContent =
+      "D&D mode keeps the table coherent: one DM, one fixed party, no drop-in custom seats.";
+  } else {
+    producerEnabled.disabled = false;
+    includeCustomAgents.disabled = false;
+    producerNote.textContent =
+      "Producer scoring stays on for fiction rooms where critique sharpens the draft.";
+    customAgentNote.textContent =
+      "Custom agents can join non-D&D rooms if you want a line editor, lore fiend, or continuity cop in the mix.";
+  }
+
+  applyModeCopy();
+  syncProducerControls();
+  setStartButtonState(sessionActive);
+}
+
 function updateStoryStatePanel(state) {
-  if (!state) return;
+  if (!state) {
+    return;
+  }
 
-  const panel = document.getElementById("story-state-panel");
-  panel.classList.remove("hidden");
-
-  // Update individual fields
+  document.getElementById("story-state-panel").classList.remove("hidden");
   document.getElementById("state-mode").textContent = state.mode
     ? state.mode.toUpperCase()
     : "-";
 
-  // Act names
   const actNames = { 1: "SETUP", 2: "CONFRONTATION", 3: "RESOLUTION" };
   document.getElementById("state-act").textContent =
-    actNames[state.current_act] || state.current_act;
+    actNames[state.current_act] || state.current_act || "-";
 
-  // Tension
   const tension = state.tension_level || 3;
   document.getElementById("state-tension").textContent = `${tension}/10`;
   document.getElementById("tension-fill").style.width = `${tension * 10}%`;
 
-  // Color the tension bar based on level
   const tensionFill = document.getElementById("tension-fill");
   if (tension <= 3) {
-    tensionFill.style.background = "var(--accent-green)";
+    tensionFill.style.background = "var(--success)";
   } else if (tension <= 6) {
-    tensionFill.style.background = "var(--accent-amber)";
+    tensionFill.style.background = "var(--warning)";
   } else {
-    tensionFill.style.background = "var(--accent-red)";
+    tensionFill.style.background = "var(--error)";
   }
 
   document.getElementById("state-pacing").textContent =
     state.pacing || "steady";
   document.getElementById("state-words").textContent = state.word_count || 0;
 
-  // Story needs - would need to be calculated client-side or sent from server
-  // For now, just show a placeholder based on act
-  let needs = "Continue building momentum";
-  if (state.current_act === 1) {
-    needs = "Establish characters and conflict";
-  } else if (state.current_act === 2) {
-    needs = "Increase tension and complications";
-  } else if (state.current_act === 3) {
-    needs = "Build toward resolution";
+  const needsLabel = document.getElementById("state-needs-label");
+  const needsValue = document.getElementById("state-needs");
+  if (state.mode === "dnd") {
+    needsLabel.textContent = "Active pressure";
+    const activeThread =
+      Array.isArray(state.plot_threads) &&
+      state.plot_threads.find((thread) => thread.status === "active");
+    needsValue.textContent = activeThread
+      ? activeThread.description
+      : "The table is still establishing the next hard problem.";
+  } else {
+    needsLabel.textContent = "Story need";
+    const needs =
+      Array.isArray(state.story_needs) && state.story_needs.length
+        ? state.story_needs[0]
+        : "Keep building momentum.";
+    needsValue.textContent = needs;
   }
-  document.getElementById("state-needs").textContent = needs;
 }
 
-// Update leaderboard
 function updateLeaderboard(leaderboard) {
   const leaderboardDiv = document.getElementById("leaderboard");
   const leaderboardList = document.getElementById("leaderboard-list");
 
   if (!leaderboard || leaderboard.length === 0) {
     leaderboardDiv.classList.add("hidden");
+    leaderboardList.innerHTML = "";
     return;
   }
 
   leaderboardDiv.classList.remove("hidden");
   leaderboardList.innerHTML = "";
-
   const medals = ["1st", "2nd", "3rd"];
 
   leaderboard.forEach((item, index) => {
@@ -478,45 +519,30 @@ function updateLeaderboard(leaderboard) {
 
     const history = document.createElement("span");
     history.className = "leaderboard-history";
-    history.textContent = `(${item.scores.join(", ")})`;
+    history.textContent = item.scores.join(", ");
 
     li.appendChild(rank);
     li.appendChild(name);
     li.appendChild(score);
     li.appendChild(history);
-
     leaderboardList.appendChild(li);
   });
 }
 
-// Show winner banner
 function showWinner(winner) {
   const banner = document.getElementById("winner-banner");
-  const name = document.getElementById("winner-name");
-  const score = document.getElementById("winner-score");
-
-  name.textContent = winner.name;
-  score.textContent = `${winner.average}/10 Average Score`;
-
+  document.getElementById("winner-name").textContent = winner.name;
+  document.getElementById("winner-score").textContent = `${winner.average}/10 average`;
   banner.classList.remove("hidden");
-
-  // Scroll to winner
-  banner.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
-// Show fired banner
 function showFired(worst) {
   const banner = document.getElementById("fired-banner");
-  const name = document.getElementById("fired-name");
-  const score = document.getElementById("fired-score");
-
-  name.textContent = worst.name;
-  score.textContent = `Lowest Score: ${worst.average}/10`;
-
+  document.getElementById("fired-name").textContent = worst.name;
+  document.getElementById("fired-score").textContent = `${worst.average}/10 average`;
   banner.classList.remove("hidden");
 }
 
-// Queue audio for playback
 function queueAudio(audioPayload) {
   if (!audioPayload) {
     return;
@@ -525,7 +551,6 @@ function queueAudio(audioPayload) {
   playNextAudio();
 }
 
-// Play next audio in queue
 function playNextAudio() {
   if (isPlayingAudio || audioQueue.length === 0) {
     return;
@@ -539,46 +564,273 @@ function playNextAudio() {
     typeof audioPayload === "string"
       ? "audio/mpeg"
       : audioPayload.mime || "audio/mpeg";
+
   if (!audioData) {
     isPlayingAudio = false;
     playNextAudio();
     return;
   }
 
-  try {
-    const audioPlayer = document.getElementById("audio-player");
-    audioPlayer.src = `data:${audioMime};base64,${audioData}`;
-    audioPlayer.onended = () => {
-      isPlayingAudio = false;
-      playNextAudio();
-    };
-    audioPlayer.onerror = () => {
-      console.error("Audio playback error");
-      isPlayingAudio = false;
-      playNextAudio();
-    };
-    audioPlayer.play().catch((err) => {
-      console.error("Failed to play audio:", err);
-      isPlayingAudio = false;
-      playNextAudio();
-    });
-  } catch (error) {
-    console.error("Audio error:", error);
+  const audioPlayer = document.getElementById("audio-player");
+  audioPlayer.src = `data:${audioMime};base64,${audioData}`;
+  audioPlayer.onended = () => {
     isPlayingAudio = false;
     playNextAudio();
+  };
+  audioPlayer.onerror = () => {
+    isPlayingAudio = false;
+    playNextAudio();
+  };
+
+  audioPlayer.play().catch((error) => {
+    console.error("Audio playback failed:", error);
+    isPlayingAudio = false;
+    playNextAudio();
+  });
+}
+
+function clearPreviousSession() {
+  audioQueue = [];
+  isPlayingAudio = false;
+  clearSessionNote();
+  clearActivityFeed();
+  renderRosterPlaceholder();
+  document.getElementById("leaderboard").classList.add("hidden");
+  document.getElementById("leaderboard-list").innerHTML = "";
+  document.getElementById("winner-banner").classList.add("hidden");
+  document.getElementById("fired-banner").classList.add("hidden");
+  document.getElementById("story-state-panel").classList.add("hidden");
+}
+
+function handleEvent(eventName, data) {
+  switch (eventName) {
+    case "connected":
+      break;
+    case "session_started":
+      sessionActive = true;
+      clearSessionNote();
+      clearActivityFeed();
+      updateModeSelection(data.mode || currentMode);
+      applyAgentRoster(data.agent_roster || []);
+      updateStatusBanner(
+        true,
+        currentMode === "dnd" ? "Table live" : "Room live",
+        `Round 1 of ${data.rounds} is loading.`,
+      );
+      appendFeedEntry(
+        "system",
+        currentMode === "dnd" ? "Adventure launched" : "Session launched",
+        data.prompt || "The room is up.",
+        currentModeInfo().name || currentMode,
+      );
+      break;
+    case "story_state_update":
+      updateStoryStatePanel(data.state);
+      break;
+    case "round_started":
+      updateStatusBanner(
+        true,
+        currentMode === "dnd" ? "Table live" : "Room live",
+        `Round ${data.round} of ${data.total}.`,
+      );
+      appendFeedEntry(
+        "round",
+        `Round ${data.round}`,
+        currentMode === "dnd"
+          ? "Fresh pressure hits the table."
+          : "The room leans into the next drafting beat.",
+      );
+      break;
+    case "agent_thinking": {
+      const { card, status } = ensureAgentCard(data.agent, data.color, "Agent");
+      card.classList.add("thinking");
+      status.innerHTML = '<span class="spinner"></span> Thinking';
+      break;
+    }
+    case "agent_response": {
+      const { card, status, responsesDiv } = ensureAgentCard(
+        data.agent,
+        data.color,
+        "Agent",
+      );
+
+      card.classList.remove("thinking");
+      status.textContent = `Round ${data.round}`;
+
+      const placeholder = responsesDiv.querySelector(".placeholder-text");
+      if (placeholder) {
+        responsesDiv.innerHTML = "";
+      }
+
+      const responseItem = document.createElement("div");
+      responseItem.className = "response-item";
+
+      const roundLabel = document.createElement("div");
+      roundLabel.className = "response-round";
+      roundLabel.textContent = `Round ${data.round}`;
+
+      const responseText = document.createElement("div");
+      responseText.className = "response-text";
+      responseText.textContent = data.response;
+
+      responseItem.appendChild(roundLabel);
+      responseItem.appendChild(responseText);
+      responsesDiv.appendChild(responseItem);
+      responsesDiv.scrollTop = responsesDiv.scrollHeight;
+
+      appendFeedEntry("turn", data.agent, data.response, `Round ${data.round}`);
+
+      if (data.audio) {
+        queueAudio({ data: data.audio, mime: data.audio_mime });
+      }
+      break;
+    }
+    case "producer_thinking": {
+      const { card, status } = ensureAgentCard(
+        "The Producer",
+        "#98C379",
+        "Quality control",
+      );
+      card.classList.add("thinking");
+      status.innerHTML = '<span class="spinner"></span> Judging';
+      updateStatusBanner(true, "Producer evaluating", `Round ${data.round} is under review.`);
+      break;
+    }
+    case "producer_verdict": {
+      const { card, status, responsesDiv } = ensureAgentCard(
+        "The Producer",
+        "#98C379",
+        "Quality control",
+      );
+      card.classList.remove("thinking");
+      status.textContent = `Round ${data.round}`;
+
+      const placeholder = responsesDiv.querySelector(".placeholder-text");
+      if (placeholder) {
+        responsesDiv.innerHTML = "";
+      }
+
+      const responseItem = document.createElement("div");
+      responseItem.className = "response-item producer-response";
+
+      const roundLabel = document.createElement("div");
+      roundLabel.className = "response-round";
+      roundLabel.textContent = `Round ${data.round} verdict`;
+
+      const responseText = document.createElement("div");
+      responseText.className = "response-text";
+      responseText.textContent = data.response;
+
+      responseItem.appendChild(roundLabel);
+      responseItem.appendChild(responseText);
+      responsesDiv.appendChild(responseItem);
+
+      updateLeaderboard(data.leaderboard);
+      appendFeedEntry("verdict", "Producer", data.response, `Round ${data.round}`);
+
+      if (data.audio) {
+        queueAudio({ data: data.audio, mime: data.audio_mime });
+      }
+      break;
+    }
+    case "session_completed":
+      sessionActive = false;
+      updateStatusBanner(
+        false,
+        "",
+        "",
+      );
+      setStartButtonState(false);
+      if (data.story_state) {
+        updateStoryStatePanel(data.story_state);
+      }
+      if (data.leaderboard) {
+        updateLeaderboard(data.leaderboard);
+      }
+      if (data.winner) {
+        showWinner(data.winner);
+      }
+      if (data.worst) {
+        showFired(data.worst);
+      }
+      if (data.brief_path) {
+        showSessionNote("Session artifacts saved.", "/briefs/latest", "Open brief");
+      } else if (data.transcript_path) {
+        showSessionNote(`Transcript saved to ${data.transcript_path}`);
+      }
+      appendFeedEntry(
+        "system",
+        "Session complete",
+        currentMode === "dnd"
+          ? "The table wrapped and the artifacts are ready."
+          : "The room wrapped and the draft artifacts are ready.",
+      );
+      break;
+    case "error":
+      sessionActive = false;
+      setStartButtonState(false);
+      updateStatusBanner(false);
+      showSessionNote(`Session error: ${data.message}`);
+      appendFeedEntry("error", "Session error", data.message || "Unknown error.");
+      break;
+    default:
+      console.log("Unhandled event:", eventName, data);
   }
 }
 
-// Start a new session
+async function rehydrateSessionState() {
+  try {
+    const response = await fetch("/api/status");
+    if (!response.ok) {
+      throw new Error(`Status request failed with ${response.status}`);
+    }
+
+    const status = await response.json();
+    sessionActive = Boolean(status.active);
+
+    if (status.config && status.config.mode) {
+      updateModeSelection(status.config.mode);
+    } else {
+      updateModeSelection(currentMode);
+    }
+
+    if (sessionActive) {
+      setStartButtonState(true);
+      updateStatusBanner(
+        true,
+        currentMode === "dnd" ? "Table live" : "Room live",
+        "Session in progress. Waiting for live updates...",
+      );
+      applyAgentRoster(status.agent_roster || []);
+      if (status.story_state) {
+        updateStoryStatePanel(status.story_state);
+      }
+      return;
+    }
+
+    setStartButtonState(false);
+    updateStatusBanner(false);
+
+    if (status.last_brief) {
+      showSessionNote("Session artifacts saved.", "/briefs/latest", "Open brief");
+    } else if (status.last_transcript) {
+      showSessionNote(`Transcript saved to ${status.last_transcript}`);
+    } else {
+      clearSessionNote();
+    }
+  } catch (error) {
+    console.error("Failed to rehydrate session state:", error);
+  }
+}
+
 async function startSession() {
   if (sessionActive) {
-    alert("A session is already running!");
     return;
   }
 
   const prompt = document.getElementById("prompt").value.trim();
-  const mode = document.getElementById("mode").value;
-  const rounds = parseInt(document.getElementById("rounds").value);
+  const notes = document.getElementById("notes").value.trim();
+  const rounds = parseInt(document.getElementById("rounds").value, 10);
   const temperature = parseFloat(document.getElementById("temperature").value);
   const producerEnabled = document.getElementById("producer-enabled").checked;
   const fireWorst = document.getElementById("fire-worst").checked;
@@ -588,35 +840,28 @@ async function startSession() {
   ).checked;
 
   if (!prompt) {
-    alert("Please enter a story prompt!");
+    showSessionNote("Give the room a premise before you launch it.");
     return;
   }
 
-  if (rounds < 1 || rounds > 10) {
-    alert("Please enter between 1 and 10 rounds");
+  if (Number.isNaN(rounds) || rounds < 1 || rounds > 10) {
+    showSessionNote("Rounds must be between 1 and 10.");
     return;
   }
 
-  // Clear previous results
   clearPreviousSession();
-  clearSessionNote();
-
-  // Disable start button
-  const startBtn = document.getElementById("start-btn");
-  startBtn.disabled = true;
-  startBtn.innerHTML = '<span class="spinner"></span> Starting...';
+  setStartButtonState(true);
 
   try {
     const response = await fetch("/api/start", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        prompt: prompt,
-        mode: mode,
-        rounds: rounds,
-        temperature: temperature,
+        prompt,
+        notes,
+        mode: currentMode,
+        rounds,
+        temperature,
         producer_enabled: producerEnabled,
         fire_worst: fireWorst,
         voice_enabled: voiceEnabled,
@@ -625,91 +870,66 @@ async function startSession() {
     });
 
     const data = await response.json();
-
     if (!response.ok) {
       throw new Error(data.error || "Failed to start session");
     }
-
-    console.log("Session started successfully");
   } catch (error) {
     console.error("Failed to start session:", error);
-    alert("Failed to start session: " + error.message);
-
-    startBtn.disabled = false;
-    startBtn.textContent = "Start Writers Room";
+    setStartButtonState(false);
+    showSessionNote(`Failed to start session: ${error.message}`);
   }
 }
 
-// Clear previous session
-function clearPreviousSession() {
-  // Clear audio queue
-  audioQueue = [];
-  isPlayingAudio = false;
-  clearSessionNote();
+function loadExamplePrompt() {
+  const preset = modePresets[currentMode];
+  if (!preset) {
+    return;
+  }
 
-  // Clear all agent responses
-  const agentIds = [
-    "rod-serling",
-    "stephen-king",
-    "hp-lovecraft",
-    "jorge-borges",
-    "robert-stack",
-    "rip-tequila-bot",
-    "the-producer",
-  ];
-
-  agentIds.forEach((id) => {
-    const responsesDiv = document.getElementById(`responses-${id}`);
-    if (responsesDiv) {
-      responsesDiv.innerHTML = '<p class="placeholder-text">Waiting...</p>';
-    }
-
-    const status = document.getElementById(`status-${id}`);
-    if (status) {
-      status.textContent = "Waiting...";
-    }
-
-    const card = document.getElementById(`agent-${id}`);
-    if (card) {
-      card.classList.remove("thinking");
-    }
-  });
-
-  // Remove dynamically created custom agent cards
-  document.querySelectorAll(".agent-card.custom-agent").forEach((card) => {
-    card.remove();
-  });
-
-  // Hide results
-  document.getElementById("leaderboard").classList.add("hidden");
-  document.getElementById("winner-banner").classList.add("hidden");
-  document.getElementById("fired-banner").classList.add("hidden");
-  document.getElementById("agent-the-producer").classList.add("hidden");
-  document.getElementById("story-state-panel").classList.add("hidden");
+  document.getElementById("prompt").value = preset.prompt;
+  document.getElementById("notes").value = preset.notes;
 }
 
-// Initialize on page load
-document.addEventListener("DOMContentLoaded", () => {
-  initSocket();
-  console.log("Writers Room Web Interface initialized");
-
-  // Check voice availability
+function checkVoiceAvailability() {
   fetch("/api/voice/available")
     .then((response) => response.json())
     .then((data) => {
+      voiceAvailable = Boolean(data.available);
       const voiceCheckbox = document.getElementById("voice-enabled");
       const voiceNote = document.getElementById("voice-note");
+
       if (voiceNote && data.message) {
         voiceNote.textContent = data.available
           ? `${data.message} Available providers: ${data.providers.join(", ")}.`
           : `${data.message} Configure OPENAI_API_KEY or ELEVENLABS_API_KEY to enable it.`;
       }
-      if (!data.available || data.providers.length === 0) {
+
+      if (!voiceAvailable) {
+        voiceCheckbox.checked = false;
         voiceCheckbox.disabled = true;
-        voiceCheckbox.parentElement.style.opacity = "0.5";
-        voiceCheckbox.parentElement.title =
-          "TTS not available (no providers configured)";
       }
     })
-    .catch((err) => console.log("Voice check failed:", err));
+    .catch((error) => {
+      console.log("Voice check failed:", error);
+    });
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll(".mode-card").forEach((card) => {
+    card.addEventListener("click", () => {
+      updateModeSelection(card.dataset.mode);
+    });
+  });
+
+  document
+    .getElementById("producer-enabled")
+    .addEventListener("change", syncProducerControls);
+  document
+    .getElementById("load-example-btn")
+    .addEventListener("click", loadExamplePrompt);
+
+  updateModeSelection(currentMode);
+  clearPreviousSession();
+  initSocket();
+  checkVoiceAvailability();
 });

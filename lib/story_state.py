@@ -88,7 +88,7 @@ class StoryState:
     with their own styles, they all focus on what the story NEEDS next.
     """
     premise: str
-    mode: str = "horror"  # horror, noir, comedy, sci-fi, literary, fantasy
+    mode: str = "horror"  # horror, noir, comedy, sci-fi, literary, fantasy, dnd
     current_act: StoryAct = StoryAct.SETUP
 
     # Story elements
@@ -349,7 +349,8 @@ class StoryStateManager:
             "comedy": "Atmosphere: Timing is everything. Subvert expectations. Find absurdity.",
             "sci-fi": "Atmosphere: Wonder and consequence. What does this technology MEAN for humanity?",
             "literary": "Atmosphere: Prose excellence. Every word earns its place. Theme over plot.",
-            "fantasy": "Atmosphere: Wonder and mythic resonance. Magic has rules and costs."
+            "fantasy": "Atmosphere: Wonder and mythic resonance. Magic has rules and costs.",
+            "dnd": "Atmosphere: Run the table honestly. Present a tactical choice, let actions have consequences, and keep the adventure moving.",
         }
         return mode_guides.get(self.state.mode, "Atmosphere: Serve the story above all.")
 
@@ -377,7 +378,7 @@ Evaluation Focus for {self.state.mode} mode:
 
     def set_mode(self, mode: str):
         """Change the story mode."""
-        valid_modes = ["horror", "noir", "comedy", "sci-fi", "literary", "fantasy"]
+        valid_modes = ["horror", "noir", "comedy", "sci-fi", "literary", "fantasy", "dnd"]
         if mode.lower() in valid_modes:
             self.state.mode = mode.lower()
 

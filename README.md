@@ -2,6 +2,8 @@
 
 Writers Room is a bare-metal Python storytelling workshop where a fixed roster of AI writers collaborate on one prompt. It ships with a terminal CLI and a FastAPI + WebSocket web interface, plus custom-agent management and shared story-state tracking.
 
+The repo now also supports a `dnd` mode that turns the table into a level 9 D&D 2024 (5.5) session with a dedicated Dungeon Master and a reusable HTML session brief. If the sibling `executive_reporting` component package is installed, Writers Room uses it; otherwise it falls back to a minimal built-in HTML brief.
+
 ## Stack
 
 - Python 3.10+
@@ -29,12 +31,24 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
+If you also have the sibling `executive_reporting` repo checked out beside this project, you can enable the richer briefing component with:
+
+```bash
+pip install -r requirements-briefing.txt
+```
+
 Set `OPENROUTER_API_KEY` in `.env`. `OPENAI_API_KEY` and `ELEVENLABS_API_KEY` are only needed if you want experimental voice playback.
+
+### Launch the Studio
+
+```bash
+./start.sh
+```
 
 ### Run the CLI
 
 ```bash
-./start.sh
+./start.sh --cli
 ```
 
 Or:
@@ -57,6 +71,8 @@ uvicorn web.app:app --reload --port 5001
 
 Open [http://localhost:5001](http://localhost:5001).
 
+When a web session finishes, the server stores both the plain transcript and an HTML brief. The latest brief is available at [http://localhost:5001/briefs/latest](http://localhost:5001/briefs/latest).
+
 ## Tests
 
 ```bash
@@ -70,12 +86,13 @@ python3 -m pytest
 - The web server supports one active session at a time. Session state is held in-process in [`web/app.py`](/Users/ryanjohnson/Projects/writers-room/web/app.py).
 - Voice playback is experimental. The UI labels it explicitly and disables the toggle when no provider is configured.
 - The web client now reconnects its WebSocket automatically after disconnects, but missed events during downtime are not replayed.
+- `dnd` mode disables custom agents for the run so the table stays coherent: one Dungeon Master plus the core writer roster as players.
 - Historical phase/fix markdown files were archived to `docs/archive/` to keep the repo surface clean.
 
 ## Key Files
 
 - [`main.py`](/Users/ryanjohnson/Projects/writers-room/main.py): CLI entrypoint
-- [`start.sh`](/Users/ryanjohnson/Projects/writers-room/start.sh): CLI launcher
+- [`start.sh`](/Users/ryanjohnson/Projects/writers-room/start.sh): default launcher for the web studio (`--cli` for terminal mode)
 - [`start_web.sh`](/Users/ryanjohnson/Projects/writers-room/start_web.sh): web launcher
 - [`lib/agents.py`](/Users/ryanjohnson/Projects/writers-room/lib/agents.py): OpenRouter client and context trimming
 - [`lib/session.py`](/Users/ryanjohnson/Projects/writers-room/lib/session.py): web session lifecycle, producer scoring, transcript persistence

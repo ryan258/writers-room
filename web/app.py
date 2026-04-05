@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 
 # Add repo root to path for lib imports
 ROOT_DIR = Path(__file__).resolve().parents[1]
+TRANSCRIPTS_DIR = ROOT_DIR / "transcripts"
 sys.path.append(str(ROOT_DIR))
 
 from lib.custom_agents import CustomAgentManager, CustomAgent, list_templates
@@ -60,6 +61,7 @@ current_session: Dict[str, Any] = {
     "thread": None,
     "active": False,
     "last_transcript": None,
+    "last_brief": None,
 }
 
 # Custom agent manager
@@ -98,6 +100,25 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+def _is_allowed_brief_path(candidate: Path) -> bool:
+    """Only serve generated HTML briefs from the transcripts directory."""
+    try:
+        resolved = candidate.resolve()
+        transcripts_root = TRANSCRIPTS_DIR.resolve()
+    except OSError:
+        return False
+
+    if resolved.suffix.lower() != ".html":
+        return False
+
+    try:
+        resolved.relative_to(transcripts_root)
+    except ValueError:
+        return False
+
+    return True
+
+
 def emit_event(event: str, data: Dict[str, Any]) -> None:
     """Thread-safe event emitter for SessionOrchestrator."""
     loop = getattr(app.state, "loop", None)
@@ -110,12 +131,14 @@ def run_session_thread(prompt: str, rounds: int, config: Dict[str, Any]) -> None
     try:
         current_session["active"] = True
         current_session["last_transcript"] = None
+        current_session["last_brief"] = None
         orchestrator = SessionOrchestrator(emit_event)
         current_session["orchestrator"] = orchestrator
 
         orchestrator.initialize(prompt, config)
         orchestrator.run_session(rounds)
         current_session["last_transcript"] = orchestrator.transcript_path
+        current_session["last_brief"] = getattr(orchestrator, "brief_path", None)
     except Exception as exc:
         emit_event(SessionEvent.ERROR, {"message": str(exc)})
     finally:
@@ -124,6 +147,7 @@ def run_session_thread(prompt: str, rounds: int, config: Dict[str, Any]) -> None
 
 class StartRequest(BaseModel):
     prompt: str = Field(..., min_length=1)
+    notes: Optional[str] = None
     rounds: int = Field(3, ge=1, le=10)
     temperature: float = Field(0.9, ge=0, le=2)
     producer_enabled: bool = True
@@ -160,7 +184,15 @@ class AgentUpdate(BaseModel):
 @app.get("/")
 async def index(request: Request):
     """Render the main UI."""
-    return templates.TemplateResponse("index.html", {"request": request, "modes": STORY_MODES})
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "modes": STORY_MODES,
+            "mode_order": ["dnd", "fantasy", "horror", "literary", "noir", "sci-fi", "comedy"],
+            "default_mode": "dnd",
+        },
+    )
 
 
 @app.get("/agents")
@@ -182,6 +214,10 @@ async def start_session(req: StartRequest):
     config = req.model_dump()
     config["model"] = req.model or DEFAULT_MODEL
     config["prompt"] = prompt
+    config["notes"] = (req.notes or "").strip()
+    if req.mode == "dnd":
+        config["producer_enabled"] = False
+        config["include_custom_agents"] = False
 
     # Start session in background thread
     thread = threading.Thread(
@@ -200,19 +236,48 @@ async def get_status():
     """Get current session status."""
     story_state = None
     config = {}
+    agent_roster = []
 
     orch = current_session.get("orchestrator")
-    if orch and orch.active:
-        if orch.story_manager:
-            story_state = orch.story_manager.get_state().to_dict()
+    if orch:
+        if orch.story_manager and orch.active:
+            story_state = orch._build_story_state_payload()
         config = orch.config
+        agent_roster = [
+            {
+                "name": agent.get("name"),
+                "color": agent.get("color"),
+                "specialty": agent.get("specialty", ""),
+            }
+            for agent in getattr(orch, "agents", [])
+        ]
 
     return {
         "active": current_session.get("active", False),
         "config": config,
+        "mode_info": STORY_MODES.get(config.get("mode", "horror"), {}),
         "story_state": story_state,
+        "agent_roster": agent_roster,
         "last_transcript": current_session.get("last_transcript"),
+        "last_brief": current_session.get("last_brief"),
     }
+
+
+@app.get("/briefs/latest", response_class=FileResponse)
+async def get_latest_brief():
+    """Return the most recent generated session brief."""
+    brief_path = current_session.get("last_brief")
+    if not brief_path:
+        return JSONResponse({"error": "No session brief has been generated yet."}, status_code=404)
+
+    html_path = Path(brief_path)
+    if not _is_allowed_brief_path(html_path):
+        return JSONResponse({"error": "Invalid brief path."}, status_code=403)
+
+    if not html_path.exists():
+        return JSONResponse({"error": "The latest session brief could not be found on disk."}, status_code=404)
+
+    return FileResponse(str(html_path), media_type="text/html")
 
 
 @app.get("/api/modes")

@@ -1,4 +1,5 @@
 import importlib
+from pathlib import Path
 
 import pytest
 
@@ -62,9 +63,85 @@ def test_status_reports_last_transcript(monkeypatch):
         "transcripts/web_session_20260402_120000.txt",
     )
     monkeypatch.setitem(web_app_module.current_session, "orchestrator", None)
+    monkeypatch.setitem(
+        web_app_module.current_session,
+        "last_brief",
+        "transcripts/web_session_20260402_120000_brief.html",
+    )
 
     with TestClient(web_app_module.app) as client:
         response = client.get("/api/status")
 
     assert response.status_code == 200
     assert response.json()["last_transcript"] == "transcripts/web_session_20260402_120000.txt"
+    assert response.json()["last_brief"] == "transcripts/web_session_20260402_120000_brief.html"
+    assert response.json()["mode_info"]["name"] == "Horror"
+
+
+def test_latest_brief_route_returns_html(monkeypatch, tmp_path):
+    web_app_module = importlib.import_module("web.app")
+    transcripts_dir = Path(web_app_module.TRANSCRIPTS_DIR)
+    transcripts_dir.mkdir(parents=True, exist_ok=True)
+    brief_path = transcripts_dir / "test_latest_brief.html"
+    brief_path.write_text("<html><body>Campaign Debrief</body></html>", encoding="utf-8")
+    monkeypatch.setitem(web_app_module.current_session, "last_brief", str(brief_path))
+
+    with TestClient(web_app_module.app) as client:
+        response = client.get("/briefs/latest")
+
+    assert response.status_code == 200
+    assert "Campaign Debrief" in response.text
+    brief_path.unlink(missing_ok=True)
+
+
+def test_latest_brief_route_rejects_paths_outside_transcripts(monkeypatch, tmp_path):
+    web_app_module = importlib.import_module("web.app")
+    brief_path = tmp_path / "latest_brief.html"
+    brief_path.write_text("<html><body>Campaign Debrief</body></html>", encoding="utf-8")
+    monkeypatch.setitem(web_app_module.current_session, "last_brief", str(brief_path))
+
+    with TestClient(web_app_module.app) as client:
+        response = client.get("/briefs/latest")
+
+    assert response.status_code == 403
+
+
+def test_start_api_forces_dnd_web_sessions_into_app_safe_config(monkeypatch):
+    web_app_module = importlib.import_module("web.app")
+    captured = {}
+
+    class DummyThread:
+        def __init__(self, target, args, daemon):
+            captured["target"] = target
+            captured["args"] = args
+            captured["daemon"] = daemon
+
+        def start(self):
+            captured["started"] = True
+
+    monkeypatch.setattr(web_app_module.threading, "Thread", DummyThread)
+    monkeypatch.setitem(web_app_module.current_session, "active", False)
+
+    with TestClient(web_app_module.app) as client:
+        response = client.post(
+            "/api/start",
+            json={
+                "prompt": "Spooky roller disco",
+                "notes": "Keep it playable and neon-gothic.",
+                "rounds": 2,
+                "temperature": 0.8,
+                "producer_enabled": True,
+                "fire_worst": True,
+                "mode": "dnd",
+                "voice_enabled": False,
+                "include_custom_agents": True,
+            },
+        )
+
+    assert response.status_code == 200
+    assert captured["started"] is True
+
+    _, _, config = captured["args"]
+    assert config["notes"] == "Keep it playable and neon-gothic."
+    assert config["producer_enabled"] is False
+    assert config["include_custom_agents"] is False
