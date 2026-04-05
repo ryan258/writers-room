@@ -1,4 +1,5 @@
 import importlib
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,32 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 from lib.custom_agents import CustomAgentManager
+
+
+def test_index_route_renders():
+    web_app_module = importlib.import_module("web.app")
+
+    with TestClient(web_app_module.app) as client:
+        response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Launch Console" in response.text
+    assert "/static/css/style.css" in response.text
+
+
+def test_agents_page_renders():
+    web_app_module = importlib.import_module("web.app")
+
+    with TestClient(web_app_module.app) as client:
+        response = client.get("/agents")
+
+    assert response.status_code == 200
+    assert "Custom Agents" in response.text
+    assert "/static/css/style.css" in response.text
+
+
+def test_runtime_has_websocket_transport():
+    assert importlib.util.find_spec("websockets") or importlib.util.find_spec("wsproto")
 
 
 def test_custom_agent_api_supports_create_update_and_delete(monkeypatch, tmp_path):

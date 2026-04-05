@@ -279,41 +279,67 @@ class StoryStateManager:
         """
         self.state.add_segment(content, author, round_num)
 
-        # Simple heuristics for story analysis
-        # In a production system, this could use NLP or an LLM
         content_lower = content.lower()
 
-        # Detect tension changes
-        tension_words = {
-            "increase": ["scream", "blood", "terror", "horror", "panic", "death", "kill"],
-            "decrease": ["calm", "peace", "relief", "safe", "escape", "hope"]
-        }
+        # --- Tension tracking -------------------------------------------------
+        high_tension = [
+            # Horror / dread
+            "scream", "blood", "terror", "horror", "panic", "death", "kill",
+            "dark", "shadow", "threat", "danger", "fear", "dread", "howl",
+            "shatter", "crash", "explode", "collapse", "trap", "curse",
+            "devour", "sacrifice", "ritual", "corrupted", "infernal",
+            # Combat / action (D&D-relevant)
+            "attack", "strike", "sword", "blade", "spell", "wound", "ambush",
+            "charge", "flee", "combat", "battle", "fight", "slash", "stab",
+            "damage", "hit", "initiative", "weapon", "arrow", "bolt",
+            "grapple", "shove", "smite", "rage", "sneak",
+            # Urgency / stakes
+            "hurry", "urgent", "countdown", "closing", "sealing",
+            "grinding", "stalking", "cornered", "surrounded", "locked",
+            "poison", "dying", "unconscious", "failed",
+        ]
+        low_tension = [
+            "calm", "peace", "relief", "safe", "escape", "hope",
+            "rest", "heal", "quiet", "steady", "breathe", "settle",
+            "laugh", "joke", "relax", "camp",
+        ]
 
-        for word in tension_words["increase"]:
+        delta = 0
+        for word in high_tension:
             if word in content_lower:
-                self.state.update_tension(1)
-                break
-
-        for word in tension_words["decrease"]:
+                delta += 1
+        for word in low_tension:
             if word in content_lower:
-                self.state.update_tension(-1)
-                break
+                delta -= 1
 
-        # Update pacing based on sentence length
-        avg_sentence_len = len(content.split()) / max(1, content.count('.') + content.count('!') + content.count('?'))
-        if avg_sentence_len < 8:
+        # Clamp per-contribution swing but allow multi-keyword hits
+        delta = max(-2, min(3, delta))
+        if delta:
+            self.state.update_tension(delta)
+
+        # Natural escalation: tension should trend upward as the session runs.
+        # If below a round-proportional floor, nudge toward it.
+        round_floor = min(8, 2 + round_num)
+        if self.state.tension_level < round_floor:
+            self.state.update_tension(1)
+
+        # --- Pacing -----------------------------------------------------------
+        sentences = max(1, content.count('.') + content.count('!') + content.count('?'))
+        avg_sentence_len = len(content.split()) / sentences
+        exclamations = content.count('!')
+        if avg_sentence_len < 8 or exclamations >= 2:
             self.state.pacing = "fast"
         elif avg_sentence_len > 20:
             self.state.pacing = "slow"
         else:
             self.state.pacing = "steady"
 
-        # Check for act transitions
-        if self.state.round_count >= 3 and self.state.current_act == StoryAct.SETUP:
-            if self.state.tension_level >= 5:
+        # --- Act transitions --------------------------------------------------
+        if self.state.current_act == StoryAct.SETUP and self.state.round_count >= 2:
+            if self.state.tension_level >= 4:
                 self.state.advance_act()
-        elif self.state.round_count >= 6 and self.state.current_act == StoryAct.CONFRONTATION:
-            if self.state.tension_level >= 8:
+        elif self.state.current_act == StoryAct.CONFRONTATION and self.state.round_count >= 5:
+            if self.state.tension_level >= 7:
                 self.state.advance_act()
 
     def get_agent_guidance(self, agent_specialty: str) -> str:

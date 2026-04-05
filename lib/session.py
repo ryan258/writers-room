@@ -31,6 +31,7 @@ except ImportError:
 
 class SessionEvent:
     SESSION_STARTED = "session_started"
+    SESSION_RESUMED = "session_resumed"
     ROUND_STARTED = "round_started"
     STORY_STATE_UPDATE = "story_state_update"
     AGENT_THINKING = "agent_thinking"
@@ -175,12 +176,17 @@ class SessionOrchestrator:
         agents = []
         agent_configs = get_agent_roster(story_mode)
 
+        dnd_mode = is_dnd_mode(story_mode)
         for agent_config in agent_configs:
-            max_tokens = 80
+            max_tokens = 300
             window_size = 15
-            if is_dnd_mode(story_mode):
-                max_tokens = 120 if agent_config['name'] == "Dungeon Master" else 90
+            response_format = None
+            json_key = None
+            if dnd_mode:
+                max_tokens = 400 if agent_config['name'] == "Dungeon Master" else 300
                 window_size = 8
+                response_format = {"type": "json_object"}
+                json_key = "line"
             agent = Agent(
                 name=agent_config['name'],
                 model=model_override,
@@ -188,6 +194,8 @@ class SessionOrchestrator:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 window_size=window_size,
+                response_format=response_format,
+                json_key=json_key,
             )
             agents.append(
                 {
@@ -226,7 +234,8 @@ class SessionOrchestrator:
                     model=model_override,
                     system_prompt=producer_prompt,
                     temperature=0.7,
-                    max_tokens=300
+                    max_tokens=600,
+                    response_format={"type": "json_object"},
                 )
              except Exception as e:
                 self.emit(SessionEvent.ERROR, {'message': f"Could not initialize Producer: {e}"})
@@ -263,6 +272,57 @@ class SessionOrchestrator:
              except Exception:
                  self.brief_path = None
              self.emit(SessionEvent.SESSION_COMPLETED, self._get_session_summary())
+
+    def _completed_rounds(self) -> int:
+        """Return the highest round number recorded so far."""
+        return max(
+            (msg.get("round", 0) for msg in self.conversation_history if msg.get("round")),
+            default=0,
+        )
+
+    def resume(self, additional_rounds: int):
+        """Continue an already-completed session for more rounds."""
+        start = self._completed_rounds() + 1
+        self.active = True
+        self.stop_event.clear()
+        self.transcript_path = None
+        self.brief_path = None
+
+        self.emit(SessionEvent.SESSION_RESUMED, {
+            'additional_rounds': additional_rounds,
+            'starting_round': start,
+            'config': self.config,
+            'agent_roster': self._get_agent_roster_payload(),
+        })
+
+        try:
+            for round_num in range(start, start + additional_rounds):
+                if self.stop_event.is_set():
+                    break
+                self._run_round(round_num, start + additional_rounds - 1)
+            self._finalize_session()
+        except Exception as e:
+            self.emit(SessionEvent.ERROR, {'message': str(e)})
+            import traceback
+            traceback.print_exc()
+        finally:
+            self.active = False
+            try:
+                self.transcript_path = self.save_transcript()
+            except Exception as exc:
+                self.emit(SessionEvent.ERROR, {'message': f"Transcript save failed: {exc}"})
+            try:
+                self.brief_path = render_session_brief(
+                    prompt=self.config.get('prompt', ''),
+                    mode=self.config.get('mode', 'horror'),
+                    story_state=self.story_manager.get_state() if self.story_manager else None,
+                    conversation_history=self.conversation_history,
+                    leaderboard=self._calculate_leaderboard(),
+                    transcript_path=self.transcript_path,
+                )
+            except Exception:
+                self.brief_path = None
+            self.emit(SessionEvent.SESSION_COMPLETED, self._get_session_summary())
 
     def _build_story_state_payload(self, state=None):
          if state is None and self.story_manager:
@@ -367,34 +427,50 @@ class SessionOrchestrator:
          agent_names_str = ", ".join(agent_names)
          mode_criteria = get_producer_mode_criteria(self.config.get('mode', 'horror'))
          
+         score_example = ", ".join(f'"{n}": 7' for n in agent_names[:2]) + ", ..."
          round_context.append({
              "role": "user",
-             "content": f"Judge round {round_num}. Score these writers: [{agent_names_str}]. IMPORTANT: Use the EXACT names provided (e.g. 'Rod Serling: 7/10'). Do NOT use 'Writer 1' or aliases.\n\nMode-specific criteria: {mode_criteria}"
+             "content": (
+                 f"Judge round {round_num}. Score these writers: [{agent_names_str}].\n"
+                 f"Mode-specific criteria: {mode_criteria}\n"
+                 f'Reply as JSON: {{"assessment": "2-3 sentence overview", "scores": {{{score_example}}}}}'
+             ),
          })
-         
+
          producer_story_context = self.story_manager.get_producer_context()
          producer_response = self.producer.generate_response(
              round_context,
              story_context=producer_story_context
          )
-         
-         round_scores = parse_producer_scores(producer_response, agent_names)
+
+         # Try structured JSON first, fall back to regex parsing
+         round_scores = self._parse_producer_json(producer_response, agent_names)
+         if not round_scores:
+             round_scores = parse_producer_scores(producer_response, agent_names)
          for agent_name, score in round_scores.items():
             if agent_name in self.agent_scores:
                 self.agent_scores[agent_name].append(score)
-         
+
+         # Extract a display-friendly string from JSON or use the raw response
+         display_response = producer_response
+         parsed = Agent.parse_json_response(producer_response)
+         if parsed and "assessment" in parsed:
+             assessment = parsed["assessment"]
+             score_lines = [f"{n}: {s}/10" for n, s in round_scores.items()]
+             display_response = f"{assessment}\n\n" + "\n".join(score_lines)
+
          # Calculate leaderboard
          leaderboard = self._calculate_leaderboard()
-         
+
          producer_audio = None
          if self.voice_enabled:
              try:
-                producer_audio = generate_agent_audio(producer_response, "The Producer")
+                producer_audio = generate_agent_audio(display_response, "The Producer")
              except Exception:
                 pass
-                
+
          self.emit(SessionEvent.PRODUCER_VERDICT, {
-             'response': producer_response,
+             'response': display_response,
              'scores': round_scores,
              'leaderboard': leaderboard,
              'round': round_num,
@@ -403,9 +479,25 @@ class SessionOrchestrator:
          })
          self.producer_feedback.append({
              'round': round_num,
-             'response': producer_response,
+             'response': display_response,
              'scores': round_scores,
          })
+
+    @staticmethod
+    def _parse_producer_json(raw: str, agent_names: List[str]) -> Optional[Dict[str, int]]:
+        """Try to extract scores from a structured JSON producer response."""
+        data = Agent.parse_json_response(raw)
+        if not data:
+            return None
+        scores_obj = data.get("scores")
+        if not isinstance(scores_obj, dict):
+            return None
+        scores: Dict[str, int] = {}
+        for name in agent_names:
+            val = scores_obj.get(name)
+            if isinstance(val, (int, float)):
+                scores[name] = max(1, min(10, int(val)))
+        return scores if scores else None
 
     def _calculate_leaderboard(self):
          leaderboard = []

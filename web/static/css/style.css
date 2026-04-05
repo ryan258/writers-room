@@ -402,6 +402,47 @@ input[type="number"]:focus {
   color: var(--text-primary);
 }
 
+.continue-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 16px;
+  background: rgba(166, 172, 205, 0.08);
+  border: 1px solid rgba(166, 172, 205, 0.18);
+  margin-top: 10px;
+  font-size: 0.92rem;
+  color: var(--text-secondary);
+}
+
+.continue-rounds-input {
+  width: 56px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(166, 172, 205, 0.25);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.92rem;
+  text-align: center;
+}
+
+.continue-button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(166, 172, 205, 0.22);
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background 150ms ease;
+  margin-left: auto;
+}
+
+.continue-button:hover {
+  background: rgba(166, 172, 205, 0.35);
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.8fr);

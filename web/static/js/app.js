@@ -594,6 +594,7 @@ function clearPreviousSession() {
   isPlayingAudio = false;
   clearSessionNote();
   clearActivityFeed();
+  hideContinueControls();
   renderRosterPlaceholder();
   document.getElementById("leaderboard").classList.add("hidden");
   document.getElementById("leaderboard-list").innerHTML = "";
@@ -733,6 +734,21 @@ function handleEvent(eventName, data) {
       }
       break;
     }
+    case "session_resumed":
+      sessionActive = true;
+      setStartButtonState(true);
+      hideContinueControls();
+      updateStatusBanner(
+        true,
+        currentMode === "dnd" ? "Table live" : "Room live",
+        `Continuing from round ${data.starting_round} (+${data.additional_rounds} rounds).`,
+      );
+      appendFeedEntry(
+        "system",
+        currentMode === "dnd" ? "Adventure continues" : "Session continues",
+        `Adding ${data.additional_rounds} more round${data.additional_rounds > 1 ? "s" : ""} to the session.`,
+      );
+      break;
     case "session_completed":
       sessionActive = false;
       updateStatusBanner(
@@ -765,6 +781,7 @@ function handleEvent(eventName, data) {
           ? "The table wrapped and the artifacts are ready."
           : "The room wrapped and the draft artifacts are ready.",
       );
+      showContinueControls();
       break;
     case "error":
       sessionActive = false;
@@ -877,6 +894,55 @@ async function startSession() {
     console.error("Failed to start session:", error);
     setStartButtonState(false);
     showSessionNote(`Failed to start session: ${error.message}`);
+  }
+}
+
+function showContinueControls() {
+  const wrap = document.getElementById("continue-controls");
+  if (wrap) {
+    wrap.classList.remove("hidden");
+  }
+}
+
+function hideContinueControls() {
+  const wrap = document.getElementById("continue-controls");
+  if (wrap) {
+    wrap.classList.add("hidden");
+  }
+}
+
+async function continueSession() {
+  if (sessionActive) {
+    return;
+  }
+
+  const roundsInput = document.getElementById("continue-rounds");
+  const rounds = roundsInput ? parseInt(roundsInput.value, 10) : 3;
+
+  if (Number.isNaN(rounds) || rounds < 1 || rounds > 10) {
+    showSessionNote("Additional rounds must be between 1 and 10.");
+    return;
+  }
+
+  hideContinueControls();
+  setStartButtonState(true);
+
+  try {
+    const response = await fetch("/api/continue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rounds }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to continue session");
+    }
+  } catch (error) {
+    console.error("Failed to continue session:", error);
+    setStartButtonState(false);
+    showContinueControls();
+    showSessionNote(`Failed to continue session: ${error.message}`);
   }
 }
 

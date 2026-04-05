@@ -112,11 +112,12 @@ def _render_minimal_session_brief(
 ) -> str | None:
     """Fallback HTML brief when the optional executive_reporting package is unavailable."""
     safe_prompt = _clean_text(prompt) or "Untitled Session"
-    latest_messages = _latest_contributions(conversation_history)
+    all_contributions = _latest_contributions(conversation_history, limit=0)
     active_threads = list(story_state.get_active_threads()) if story_state else []
     story_needs = list(story_state.get_story_needs()) if story_state else []
     mode_info = STORY_MODES.get(mode, {})
-    document_label = "Campaign Debrief" if is_dnd_mode(mode) else "Session Debrief"
+    dnd = is_dnd_mode(mode)
+    document_label = "Campaign Debrief" if dnd else "Session Debrief"
     mode_name = mode_info.get("name", mode.upper())
     primary_need = _select_primary_need(mode, story_needs)
     summary = _build_summary(
@@ -125,36 +126,42 @@ def _render_minimal_session_brief(
         story_state=story_state,
         primary_need=primary_need,
         active_threads=active_threads,
-        latest_messages=latest_messages,
+        latest_messages=all_contributions,
     )
 
-    leaderboard_items = "".join(
-        f"<li><strong>{html.escape(item['name'])}</strong> <span>{item['average']}/10</span></li>"
-        for item in leaderboard[:5]
-    ) or "<li>No scores recorded.</li>"
-    if leaderboard:
-        leader = leaderboard[0]
-        leader_summary = (
-            f"{leader['name']} led the table at {leader['average']}/10 average."
-        )
-        leaderboard_summary = f"<p>{html.escape(leader_summary)}</p>"
-    else:
-        leaderboard_summary = "<p>No leaderboard data was available.</p>"
-    latest_items = "".join(
-        (
-            f"<li><strong>{html.escape(entry['name'])}</strong>: "
-            f"{html.escape(_clean_text(entry['content']))}</li>"
-        )
-        for entry in latest_messages[-5:]
-    ) or "<li>No transcript lines were available.</li>"
-    thread_items = "".join(
-        f"<li>{html.escape(_clean_text(thread.description))}</li>"
-        for thread in active_threads[:5]
-    ) or "<li>No active threads remained.</li>"
     summary_items = "".join(f"<li>{html.escape(line)}</li>" for line in summary)
 
+    # --- Build the full encounter / contributions log ---
+    encounter_html = _build_encounter_log_html(conversation_history, dnd)
+
+    # --- Leaderboard ---
+    leaderboard_rows = "".join(
+        f"<tr><td>{html.escape(item['name'])}</td>"
+        f"<td>{item['average']}/10</td>"
+        f"<td>{', '.join(str(s) for s in item.get('scores', []))}</td></tr>"
+        for item in leaderboard
+    )
+    leaderboard_html = (
+        f"<table><thead><tr><th>Agent</th><th>Average</th><th>Round Scores</th></tr></thead>"
+        f"<tbody>{leaderboard_rows}</tbody></table>"
+        if leaderboard_rows
+        else "<p>No scores recorded.</p>"
+    )
+    if leaderboard:
+        leader = leaderboard[0]
+        leaderboard_html = (
+            f"<p class=\"leader\">{html.escape(leader['name'])} led the table at {leader['average']}/10 average.</p>"
+            + leaderboard_html
+        )
+
+    # --- Open Threads ---
+    thread_items = "".join(
+        f"<li>{html.escape(_clean_text(thread.description))}</li>"
+        for thread in active_threads
+    ) or "<li>No active threads remained.</li>"
+
     transcript_line = (
-        f"<p><strong>Transcript:</strong> {html.escape(transcript_path)}</p>"
+        f"<p class=\"transcript-link\">Full transcript: <code>{html.escape(transcript_path)}</code></p>"
         if transcript_path
         else ""
     )
@@ -166,29 +173,43 @@ def _render_minimal_session_brief(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{html.escape(document_label)}: {html.escape(safe_prompt)}</title>
   <style>
-    body {{ margin: 0; font-family: Georgia, serif; background: #121212; color: #EBD2BE; }}
+    :root {{ --bg: #121212; --surface: #1A1A1A; --border: #242424; --text: #EBD2BE; --muted: #6B7280; --accent: #A6ACCD; }}
+    body {{ margin: 0; font-family: Georgia, serif; background: var(--bg); color: var(--text); }}
     main {{ max-width: 960px; margin: 0 auto; padding: 32px 20px 56px; }}
-    section {{ background: #1A1A1A; border: 1px solid #242424; border-radius: 20px; padding: 20px; margin-top: 18px; }}
-    h1, h2 {{ margin: 0 0 10px; }}
-    p, li {{ line-height: 1.6; }}
-    .eyebrow {{ color: #A6ACCD; text-transform: uppercase; letter-spacing: 0.14em; font-size: 0.8rem; }}
-    .meta {{ color: #6B7280; }}
+    section {{ background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-top: 20px; }}
+    h1 {{ font-size: 1.7rem; margin: 4px 0 6px; }}
+    h2 {{ font-size: 1.2rem; margin: 0 0 14px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }}
+    h3 {{ font-size: 1rem; color: var(--accent); margin: 20px 0 10px; }}
+    h3:first-child {{ margin-top: 0; }}
+    p, li {{ line-height: 1.7; }}
     ul {{ margin: 0; padding-left: 20px; }}
+    .eyebrow {{ color: var(--accent); text-transform: uppercase; letter-spacing: 0.14em; font-size: 0.75rem; }}
+    .meta {{ color: var(--muted); font-size: 0.9rem; }}
+    .hook {{ font-style: italic; color: var(--accent); margin: 12px 0; font-size: 1.05rem; }}
+    .turn {{ margin: 8px 0; padding: 6px 0; }}
+    .turn .agent-name {{ font-weight: bold; }}
+    .turn .content {{ margin-left: 4px; }}
+    .leader {{ font-size: 1.05rem; margin-bottom: 12px; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 0.92rem; }}
+    th, td {{ text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }}
+    th {{ color: var(--accent); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; }}
+    .transcript-link {{ color: var(--muted); font-size: 0.85rem; margin-top: 16px; }}
+    code {{ background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; }}
   </style>
 </head>
 <body>
   <main>
     <div class="eyebrow">Writers Room</div>
-    <h1>{html.escape(document_label)}: {html.escape(safe_prompt)}</h1>
-    <p class="meta">{html.escape(mode_name)} | {datetime.now().strftime("%B %d, %Y")}</p>
+    <h1>{html.escape(document_label)}</h1>
+    <p class="hook">{html.escape(safe_prompt)}</p>
+    <p class="meta">{html.escape(mode_name)} &middot; {datetime.now().strftime("%B %d, %Y")}</p>
     <section>
-      <h2>Executive Summary</h2>
+      <h2>Summary</h2>
       <ul>{summary_items}</ul>
-      {transcript_line}
     </section>
     <section>
-      <h2>Latest Contributions</h2>
-      <ul>{latest_items}</ul>
+      <h2>{"Encounter Log" if dnd else "Session Log"}</h2>
+      {encounter_html}
     </section>
     <section>
       <h2>Open Threads</h2>
@@ -196,9 +217,9 @@ def _render_minimal_session_brief(
     </section>
     <section>
       <h2>Leaderboard</h2>
-      {leaderboard_summary}
-      <ul>{leaderboard_items}</ul>
+      {leaderboard_html}
     </section>
+    {transcript_line}
   </main>
 </body>
 </html>"""
@@ -498,7 +519,45 @@ def _build_sources(transcript_path: str | None, latest_messages: list[dict[str, 
     return sources
 
 
-def _latest_contributions(conversation_history: list[dict[str, Any]], limit: int = 5) -> list[dict[str, str]]:
+def _build_encounter_log_html(conversation_history: list[dict[str, Any]], dnd: bool) -> str:
+    """Build the full round-by-round (or flat) HTML log of all contributions."""
+    assistant_msgs = [
+        msg for msg in conversation_history
+        if msg.get("role") == "assistant" and msg.get("content")
+    ]
+    if not assistant_msgs:
+        return "<p>No contributions were recorded.</p>"
+
+    # Check if we have round metadata
+    has_rounds = any(msg.get("round") for msg in assistant_msgs)
+
+    if has_rounds:
+        rounds: dict[int, list[dict[str, Any]]] = {}
+        for msg in assistant_msgs:
+            r = msg.get("round", 0)
+            rounds.setdefault(r, []).append(msg)
+
+        sections = []
+        for round_num in sorted(rounds):
+            label = f"Round {round_num}" if round_num else "Prologue"
+            turns = "".join(
+                f'<div class="turn"><span class="agent-name">{html.escape(msg.get("name", "Agent"))}</span>: '
+                f'<span class="content">{html.escape(_clean_text(msg.get("content", "")))}</span></div>'
+                for msg in rounds[round_num]
+            )
+            sections.append(f"<h3>{html.escape(label)}</h3>{turns}")
+        return "\n".join(sections)
+
+    # Flat list for non-round sessions
+    turns = "".join(
+        f'<div class="turn"><span class="agent-name">{html.escape(msg.get("name", "Agent"))}</span>: '
+        f'<span class="content">{html.escape(_clean_text(msg.get("content", "")))}</span></div>'
+        for msg in assistant_msgs
+    )
+    return turns
+
+
+def _latest_contributions(conversation_history: list[dict[str, Any]], limit: int = 0) -> list[dict[str, str]]:
     contributions = [
         {
             "name": str(message.get("name") or "Agent"),
@@ -507,7 +566,9 @@ def _latest_contributions(conversation_history: list[dict[str, Any]], limit: int
         for message in conversation_history
         if message.get("role") == "assistant" and message.get("content")
     ]
-    return contributions[-limit:]
+    if limit > 0:
+        return contributions[-limit:]
+    return contributions
 
 
 def _resolve_output_path(output_path: str | Path | None, transcript_path: str | None) -> Path | None:

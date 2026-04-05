@@ -3,11 +3,12 @@ Agent class for Writers Room AI agents.
 Each agent has a unique personality defined by its system prompt.
 """
 
+import json
 import os
 import time
 from openai import OpenAI
 from dotenv import load_dotenv
-from typing import Optional
+from typing import Any, Optional
 
 load_dotenv()
 
@@ -15,7 +16,7 @@ load_dotenv()
 class Agent:
     """An AI agent with a specific personality and model."""
 
-    def __init__(self, name: str, model: str, system_prompt: str, temperature: float = 0.9, max_tokens: int = 80, window_size: int = 15):
+    def __init__(self, name: str, model: str, system_prompt: str, temperature: float = 0.9, max_tokens: int = 300, window_size: int = 15, response_format: Optional[dict[str, Any]] = None, json_key: Optional[str] = None):
         """
         Initialize an AI agent.
 
@@ -26,6 +27,8 @@ class Agent:
             temperature: Sampling temperature (0.0-2.0, default: 0.9)
             max_tokens: Maximum tokens per response (default: 80 for one sentence)
             window_size: Number of recent messages to keep in context (default: 15)
+            response_format: Optional OpenAI response_format dict (e.g. {"type": "json_object"})
+            json_key: When response_format is set, extract this key from the JSON response
         """
         self.name = name
         self.model = model
@@ -33,6 +36,8 @@ class Agent:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.window_size = window_size
+        self.response_format = response_format
+        self.json_key = json_key
 
         # Initialize OpenAI client pointing to OpenRouter
         self.client = OpenAI(
@@ -53,12 +58,10 @@ class Agent:
         Returns:
             The agent's response as a string
         """
-        # Build the system prompt, incorporating story context if provided
-        if story_context:
-            # Inject story state into the system prompt
-            full_system_prompt = f"{self.system_prompt}\n\n{story_context}"
-        else:
-            full_system_prompt = self.system_prompt
+        # Keep system prompt pure (agent identity only).
+        # Story context is injected as a separate user message below
+        # to prevent table-talk contamination from causing role confusion.
+        full_system_prompt = self.system_prompt
 
         # PRESERVE ORIGINAL PROMPT: Always keep the first message (user's story prompt)
         # Then apply sliding window to recent messages to maintain story context
@@ -96,36 +99,45 @@ class Agent:
             {"role": "system", "content": full_system_prompt}
         ] + safe_context
 
+        # Inject story context as a grounding user message at the end,
+        # separate from the system prompt to avoid role confusion
+        if story_context:
+            messages.append({"role": "user", "content": story_context})
+
         max_retries = 3
 
         for attempt in range(max_retries):
             try:
-                # Call OpenRouter API
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    extra_headers={
+                create_kwargs = {
+                    "model": self.model,
+                    "messages": messages,
+                    "extra_headers": {
                         "HTTP-Referer": os.getenv("YOUR_SITE_URL", "http://localhost"),
                         "X-Title": "YOUR_SITE_NAME",
                     },
-                    max_tokens=self.max_tokens,  # Configurable token limit (80 for writers, 300 for Producer)
-                    presence_penalty=1.2, # MAXIMUM: Strongly discourage any repetition
-                    frequency_penalty=1.0, # ANTI-ECHO: Penalize repeated tokens
-                    temperature=self.temperature,  # Configurable creativity level
-                )
+                    "max_tokens": self.max_tokens,
+                    "presence_penalty": 1.2,
+                    "frequency_penalty": 1.0,
+                    "temperature": self.temperature,
+                }
+                if self.response_format:
+                    create_kwargs["response_format"] = self.response_format
 
+                response = self.client.chat.completions.create(**create_kwargs)
                 raw_response = response.choices[0].message.content.strip()
+
+                # If structured output was requested, try to extract the target key
+                if self.response_format and self.json_key:
+                    extracted = self._extract_json_field(raw_response, self.json_key)
+                    if extracted is not None:
+                        return extracted
 
                 # POST-PROCESSING: Remove any echoed context
                 # If the response starts with "..." it's likely echoing truncated context
                 if raw_response.startswith("..."):
-                    # Find the last occurrence of a sentence-ending pattern
-                    # Then return everything after it
                     import re
-                    # Look for the last complete sentence boundary after ellipsis
                     sentences = re.split(r'(?<=[.!?])\s+', raw_response)
                     if len(sentences) > 1:
-                        # Return only the last sentence (the new content)
                         return sentences[-1]
 
                 return raw_response
@@ -145,6 +157,29 @@ class Agent:
                     return f"[ERROR: {self.name} failed to respond - {error_str}]"
 
         return f"[ERROR: {self.name} failed to respond]"
+
+    @staticmethod
+    def _extract_json_field(raw: str, key: str) -> Optional[str]:
+        """Try to parse JSON and return the value at *key*, or None on failure."""
+        try:
+            data = json.loads(raw)
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            pass
+        return None
+
+    @staticmethod
+    def parse_json_response(raw: str) -> Optional[dict]:
+        """Parse a full JSON response dict, or None on failure."""
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            pass
+        return None
 
     def update_system_prompt(self, new_prompt: str):
         """Update the agent's system prompt dynamically."""

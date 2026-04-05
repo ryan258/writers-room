@@ -179,3 +179,119 @@ def test_session_orchestrator_cleans_dnd_prompt_leakage(monkeypatch, tmp_path):
     assert all("we need to" not in response.lower() for response in responses)
     assert all("speak only as" not in response.lower() for response in responses)
     assert responses[0].startswith("The mirror ball jerks once")
+
+
+def test_session_resume_continues_from_correct_round(monkeypatch, tmp_path):
+    """Resuming a completed session picks up at the next round number."""
+    class DummyAgent:
+        def __init__(self, name, **kwargs):
+            self.name = name
+
+        def generate_response(self, context, story_context=None):
+            return f"{self.name} contributes."
+
+    monkeypatch.setattr(session_module, "Agent", DummyAgent)
+    monkeypatch.setattr(
+        session_module,
+        "render_session_brief",
+        lambda **kwargs: str(tmp_path / "brief.html"),
+    )
+
+    events = []
+    orchestrator = session_module.SessionOrchestrator(
+        lambda event, payload: events.append((event, payload))
+    )
+    config = {
+        "mode": "horror",
+        "rounds": 2,
+        "temperature": 0.9,
+        "producer_enabled": False,
+        "voice_enabled": False,
+        "include_custom_agents": False,
+        "prompt": "A door that shouldn't be open.",
+        "transcript_dir": str(tmp_path),
+    }
+
+    orchestrator.initialize("A door that shouldn't be open.", config)
+    orchestrator.run_session(2)
+
+    # Session completed with 2 rounds
+    assert orchestrator._completed_rounds() == 2
+    assert not orchestrator.active
+
+    # Count contributions so far
+    initial_contributions = len([
+        m for m in orchestrator.conversation_history if m.get("role") == "assistant"
+    ])
+
+    # Resume for 1 more round
+    events.clear()
+    orchestrator.resume(1)
+
+    # Verify resumed event fired with correct round
+    resumed = next(
+        payload for event, payload in events
+        if event == session_module.SessionEvent.SESSION_RESUMED
+    )
+    assert resumed["starting_round"] == 3
+    assert resumed["additional_rounds"] == 1
+
+    # Verify round 3 actually ran
+    round_events = [
+        payload for event, payload in events
+        if event == session_module.SessionEvent.ROUND_STARTED
+    ]
+    assert round_events[0]["round"] == 3
+
+    # Verify new contributions were appended
+    final_contributions = len([
+        m for m in orchestrator.conversation_history if m.get("role") == "assistant"
+    ])
+    assert final_contributions > initial_contributions
+
+    # Verify session completed again
+    completed = any(
+        event == session_module.SessionEvent.SESSION_COMPLETED
+        for event, _ in events
+    )
+    assert completed
+    assert not orchestrator.active
+
+
+def test_parse_producer_json_extracts_scores():
+    """Structured JSON producer response yields clean scores."""
+    import json
+
+    raw = json.dumps({
+        "assessment": "Strong round with good teamwork.",
+        "scores": {
+            "Rod Serling": 8,
+            "Stephen King": 7,
+            "H.P. Lovecraft": 6,
+        },
+    })
+    agent_names = ["Rod Serling", "Stephen King", "H.P. Lovecraft"]
+
+    scores = session_module.SessionOrchestrator._parse_producer_json(raw, agent_names)
+
+    assert scores == {"Rod Serling": 8, "Stephen King": 7, "H.P. Lovecraft": 6}
+
+
+def test_parse_producer_json_clamps_values():
+    """Scores outside 1-10 are clamped."""
+    import json
+
+    raw = json.dumps({"scores": {"A": 0, "B": 15}})
+    scores = session_module.SessionOrchestrator._parse_producer_json(raw, ["A", "B"])
+
+    assert scores == {"A": 1, "B": 10}
+
+
+def test_parse_producer_json_returns_none_on_bad_json():
+    """Non-JSON or missing scores key returns None for regex fallback."""
+    assert session_module.SessionOrchestrator._parse_producer_json(
+        "not json", ["A"]
+    ) is None
+    assert session_module.SessionOrchestrator._parse_producer_json(
+        '{"assessment": "ok"}', ["A"]
+    ) is None

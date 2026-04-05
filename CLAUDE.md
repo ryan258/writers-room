@@ -35,14 +35,14 @@ Run the web UI:
 Run tests:
 
 ```bash
-pytest
+uv run pytest -q
 ```
 
 Direct entrypoints:
 
 ```bash
-python main.py --help
-uvicorn web.app:app --reload --port 5001
+uv run python main.py --help
+uv run uvicorn web.app:app --reload --port 5001
 ```
 
 ## Architecture
@@ -65,6 +65,7 @@ uvicorn web.app:app --reload --port 5001
 
 ## Operational Notes
 
+- `uv` is the canonical environment/dependency manager for this repo; `requirements.txt` is only the fallback path for non-`uv` installs
 - The web server supports one live session at a time via in-process global state
 - WebSocket reconnect is automatic, but lost events are not replayed
 - Web and CLI transcripts are written to `transcripts/`

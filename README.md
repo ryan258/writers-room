@@ -25,8 +25,17 @@ The repo now also supports a `dnd` mode that turns the table into a level 9 D&D 
 ## Quick Start
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+uv sync --group dev
+cp .env.example .env
+```
+
+`uv` is now the canonical environment and dependency manager for this repo. `./start.sh`, `./start.sh --cli`, and `./start_web.sh` all prefer `uv` automatically when `pyproject.toml` is present.
+
+If you need the legacy fallback path instead:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 ```
@@ -34,7 +43,7 @@ cp .env.example .env
 If you also have the sibling `executive_reporting` repo checked out beside this project, you can enable the richer briefing component with:
 
 ```bash
-pip install -r requirements-briefing.txt
+uv pip install -r requirements-briefing.txt
 ```
 
 Set `OPENROUTER_API_KEY` in `.env`. `OPENAI_API_KEY` and `ELEVENLABS_API_KEY` are only needed if you want experimental voice playback.
@@ -54,7 +63,7 @@ Set `OPENROUTER_API_KEY` in `.env`. `OPENAI_API_KEY` and `ELEVENLABS_API_KEY` ar
 Or:
 
 ```bash
-python main.py
+uv run python main.py
 ```
 
 ### Run the Web UI
@@ -66,7 +75,7 @@ python main.py
 Or:
 
 ```bash
-uvicorn web.app:app --reload --port 5001
+uv run uvicorn web.app:app --reload --port 5001
 ```
 
 Open [http://localhost:5001](http://localhost:5001).
@@ -76,7 +85,7 @@ When a web session finishes, the server stores both the plain transcript and an 
 ## Tests
 
 ```bash
-python3 -m pytest
+uv run pytest -q
 ```
 
 `pytest.ini` restricts discovery to the real `tests/` suite so the legacy manual verification scripts at repo root are not collected.
@@ -93,7 +102,7 @@ python3 -m pytest
 
 - [`main.py`](/Users/ryanjohnson/Projects/writers-room/main.py): CLI entrypoint
 - [`start.sh`](/Users/ryanjohnson/Projects/writers-room/start.sh): default launcher for the web studio (`--cli` for terminal mode)
-- [`start_web.sh`](/Users/ryanjohnson/Projects/writers-room/start_web.sh): web launcher
+- [`start_web.sh`](/Users/ryanjohnson/Projects/writers-room/start_web.sh): `uv`-first web launcher with venv/pip fallback
 - [`lib/agents.py`](/Users/ryanjohnson/Projects/writers-room/lib/agents.py): OpenRouter client and context trimming
 - [`lib/session.py`](/Users/ryanjohnson/Projects/writers-room/lib/session.py): web session lifecycle, producer scoring, transcript persistence
 - [`web/static/js/app.js`](/Users/ryanjohnson/Projects/writers-room/web/static/js/app.js): WebSocket client, UI event handling, audio queue

@@ -5,6 +5,7 @@ FastAPI backend for real-time collaborative storytelling.
 """
 
 import asyncio
+import inspect
 import os
 import sys
 import threading
@@ -42,6 +43,9 @@ app = FastAPI(lifespan=lifespan)
 WEB_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
+TEMPLATE_RESPONSE_REQUEST_FIRST = (
+    tuple(inspect.signature(Jinja2Templates.TemplateResponse).parameters)[1] == "request"
+)
 
 # CORS configuration
 origins_env = os.getenv("CORS_ORIGINS", "*")
@@ -126,6 +130,18 @@ def emit_event(event: str, data: Dict[str, Any]) -> None:
         asyncio.run_coroutine_threadsafe(manager.broadcast(event, data), loop)
 
 
+def render_template(request: Request, template_name: str, context: Optional[Dict[str, Any]] = None):
+    """Support both legacy and current Starlette TemplateResponse signatures."""
+    template_context = {"request": request}
+    if context:
+        template_context.update(context)
+
+    if TEMPLATE_RESPONSE_REQUEST_FIRST:
+        return templates.TemplateResponse(request, template_name, template_context)
+
+    return templates.TemplateResponse(template_name, template_context)
+
+
 def run_session_thread(prompt: str, rounds: int, config: Dict[str, Any]) -> None:
     global current_session
     try:
@@ -158,6 +174,10 @@ class StartRequest(BaseModel):
     model: Optional[str] = None
 
 
+class ContinueRequest(BaseModel):
+    rounds: int = Field(3, ge=1, le=10)
+
+
 class AgentCreate(BaseModel):
     name: str = Field(..., min_length=1)
     specialty: str = Field(..., min_length=1)
@@ -184,10 +204,10 @@ class AgentUpdate(BaseModel):
 @app.get("/")
 async def index(request: Request):
     """Render the main UI."""
-    return templates.TemplateResponse(
+    return render_template(
+        request,
         "index.html",
         {
-            "request": request,
             "modes": STORY_MODES,
             "mode_order": ["dnd", "fantasy", "horror", "literary", "noir", "sci-fi", "comedy"],
             "default_mode": "dnd",
@@ -198,7 +218,7 @@ async def index(request: Request):
 @app.get("/agents")
 async def agents_page(request: Request):
     """Render the custom agents UI."""
-    return templates.TemplateResponse("agents.html", {"request": request})
+    return render_template(request, "agents.html")
 
 
 @app.post("/api/start")
@@ -229,6 +249,42 @@ async def start_session(req: StartRequest):
     current_session["thread"] = thread
 
     return {"status": "started"}
+
+
+def continue_session_thread(orchestrator: SessionOrchestrator, additional_rounds: int) -> None:
+    global current_session
+    try:
+        current_session["active"] = True
+        current_session["last_transcript"] = None
+        current_session["last_brief"] = None
+        orchestrator.resume(additional_rounds)
+        current_session["last_transcript"] = orchestrator.transcript_path
+        current_session["last_brief"] = getattr(orchestrator, "brief_path", None)
+    except Exception as exc:
+        emit_event(SessionEvent.ERROR, {"message": str(exc)})
+    finally:
+        current_session["active"] = False
+
+
+@app.post("/api/continue")
+async def continue_session(req: ContinueRequest):
+    """Continue a completed session for additional rounds."""
+    if current_session.get("active"):
+        return JSONResponse({"error": "Session already active"}, status_code=400)
+
+    orchestrator = current_session.get("orchestrator")
+    if not orchestrator:
+        return JSONResponse({"error": "No session to continue. Start one first."}, status_code=400)
+
+    thread = threading.Thread(
+        target=continue_session_thread,
+        args=(orchestrator, req.rounds),
+        daemon=True,
+    )
+    thread.start()
+    current_session["thread"] = thread
+
+    return {"status": "resumed", "additional_rounds": req.rounds}
 
 
 @app.get("/api/status")

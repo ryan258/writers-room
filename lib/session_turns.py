@@ -38,6 +38,10 @@ DND_META_MARKERS = GENERAL_META_MARKERS + (
     "okay, i am",
     "okay i am",
     "okay, if i am",
+    "okay, if i",
+    "okay, so",
+    "okay, let",
+    "okay, the user",
     "if i am to",
     "i am the dm",
     "we are the dm",
@@ -51,9 +55,30 @@ DND_META_MARKERS = GENERAL_META_MARKERS + (
     "adventure hook:",
     "act:",
     "tension:",
-    "since it's inspired by",
+    "since it’s inspired by",
     "since it’s inspired by",
     "the tone should be",
+    # Chain-of-thought / reasoning leakage
+    "the user is",
+    "the user wants",
+    "the user ",
+    "roleplay",
+    "in-character",
+    "recent table talk",
+    "i’ll respond",
+    "i’ll provide",
+    "i’ll continue",
+    "i should respond",
+    "i should provide",
+    "i need to respond",
+    "let me respond",
+    "let me provide",
+    "let me continue",
+    "my response",
+    "here is my",
+    "here’s my",
+    "making declarations",
+    "wants me to",
 )
 
 DND_FALLBACKS = {
@@ -99,6 +124,10 @@ def looks_like_dnd_meta_response(text: str) -> bool:
     if lowered.startswith("[error:"):
         return False
     if lowered in {":", "-", "okay", "okay,"}:
+        return True
+
+    # Too short and incomplete — likely a truncated stub like "We are"
+    if len(lowered) < 30 and not re.search(r'[.!?"\'\)]$', lowered):
         return True
 
     preview = lowered[:220]
@@ -201,11 +230,15 @@ def build_dnd_story_context(
     state = story_manager.get_state()
     active_threads = state.get_active_threads()
     clean_history = build_clean_dnd_history(conversation_history)
-    recent_turns = [
-        f"- {msg.get('name', 'Agent')}: {clean_single_line(msg.get('content', ''))[:140]}"
-        for msg in clean_history
-        if msg.get("role") == "assistant" and msg.get("content")
-    ][-3:]
+    recent_turns = []
+    for msg in clean_history:
+        if msg.get("role") != "assistant" or not msg.get("content"):
+            continue
+        line = clean_single_line(msg.get("content", ""))[:140]
+        if looks_like_dnd_meta_response(line):
+            continue
+        recent_turns.append(f"- {msg.get('name', 'Agent')}: {line}")
+    recent_turns = recent_turns[-3:]
 
     lines = [
         "=== D&D TABLE STATE ===",
@@ -234,6 +267,7 @@ def build_dnd_story_context(
         )
 
     lines.append("No prompt talk. No explanation. No bullets.")
+    lines.append('Reply as JSON: {"line": "your in-character line here"}')
     lines.append("=" * 24)
     return "\n".join(lines)
 
