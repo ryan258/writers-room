@@ -21,6 +21,7 @@ def render_session_brief(
     leaderboard: list[dict[str, Any]],
     transcript_path: str | None = None,
     output_path: str | Path | None = None,
+    final_draft_markdown: str | None = None,
 ) -> str | None:
     """Render a reusable session brief to HTML and return the saved path."""
     try:
@@ -38,6 +39,7 @@ def render_session_brief(
             leaderboard=leaderboard,
             transcript_path=transcript_path,
             output_path=output_path,
+            final_draft_markdown=final_draft_markdown,
         )
 
     safe_prompt = _clean_text(prompt) or "Untitled Session"
@@ -91,6 +93,11 @@ def render_session_brief(
     )
     html_output = component.render_html(brief)
 
+    if final_draft_markdown:
+        html_output = _inject_final_draft_into_exec_html(
+            html_output, final_draft_markdown
+        )
+
     target_path = _resolve_output_path(output_path, transcript_path)
     if target_path is None:
         return None
@@ -109,6 +116,7 @@ def _render_minimal_session_brief(
     leaderboard: list[dict[str, Any]],
     transcript_path: str | None = None,
     output_path: str | Path | None = None,
+    final_draft_markdown: str | None = None,
 ) -> str | None:
     """Fallback HTML brief when the optional executive_reporting package is unavailable."""
     safe_prompt = _clean_text(prompt) or "Untitled Session"
@@ -166,6 +174,12 @@ def _render_minimal_session_brief(
         else ""
     )
 
+    final_draft_section = (
+        _final_draft_to_html(final_draft_markdown)
+        if final_draft_markdown
+        else ""
+    )
+
     html_output = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -195,6 +209,13 @@ def _render_minimal_session_brief(
     th {{ color: var(--accent); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; }}
     .transcript-link {{ color: var(--muted); font-size: 0.85rem; margin-top: 16px; }}
     code {{ background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; }}
+    .final-draft {{ border-color: var(--accent); }}
+    .final-draft h2 {{ color: var(--accent); }}
+    .final-draft .draft-body {{ max-width: 68ch; margin: 0 auto; font-size: 1.05rem; line-height: 1.85; }}
+    .final-draft .draft-body h1 {{ font-size: 1.5rem; text-align: center; margin: 0 0 20px; }}
+    .final-draft .draft-body h2 {{ font-size: 1.15rem; border: none; color: var(--text); margin: 24px 0 10px; padding: 0; }}
+    .final-draft .draft-body h3 {{ margin: 20px 0 8px; }}
+    .final-draft .draft-body p {{ margin: 0 0 14px; }}
   </style>
 </head>
 <body>
@@ -203,6 +224,7 @@ def _render_minimal_session_brief(
     <h1>{html.escape(document_label)}</h1>
     <p class="hook">{html.escape(safe_prompt)}</p>
     <p class="meta">{html.escape(mode_name)} &middot; {datetime.now().strftime("%B %d, %Y")}</p>
+    {final_draft_section}
     <section>
       <h2>Summary</h2>
       <ul>{summary_items}</ul>
@@ -613,3 +635,100 @@ def _slugify(value: str) -> str:
     while "--" in slug:
         slug = slug.replace("--", "-")
     return slug.strip("-")
+
+
+def _final_draft_to_html(markdown_text: str) -> str:
+    """Convert a simple Markdown draft into an HTML section for the brief.
+
+    Handles only the subset of Markdown the Editor is instructed to emit:
+    ``#``/``##``/``###`` headings and paragraph breaks on blank lines. Any
+    inline markup is escaped rather than rendered so the brief never executes
+    unexpected HTML.
+    """
+    if not markdown_text or not markdown_text.strip():
+        return ""
+
+    def render_heading(line: str) -> str | None:
+        stripped = line.strip()
+        if stripped.startswith("### "):
+            return f"<h3>{html.escape(stripped[4:].strip())}</h3>"
+        if stripped.startswith("## "):
+            return f"<h2>{html.escape(stripped[3:].strip())}</h2>"
+        if stripped.startswith("# "):
+            return f"<h1>{html.escape(stripped[2:].strip())}</h1>"
+        return None
+
+    def flush_paragraph(buffer: list[str], out: list[str]) -> None:
+        if not buffer:
+            return
+        escaped = [html.escape(line.strip()) for line in buffer if line.strip()]
+        if escaped:
+            out.append("<p>" + "<br>".join(escaped) + "</p>")
+        buffer.clear()
+
+    blocks = [block for block in markdown_text.strip().split("\n\n") if block.strip()]
+    rendered: list[str] = []
+    for block in blocks:
+        paragraph_buffer: list[str] = []
+        for line in block.splitlines():
+            heading_html = render_heading(line)
+            if heading_html is not None:
+                flush_paragraph(paragraph_buffer, rendered)
+                rendered.append(heading_html)
+            else:
+                paragraph_buffer.append(line)
+        flush_paragraph(paragraph_buffer, rendered)
+
+    body = "\n".join(rendered)
+    return (
+        '<section class="final-draft">\n'
+        '  <h2>Final Draft</h2>\n'
+        f'  <div class="draft-body">{body}</div>\n'
+        '</section>'
+    )
+
+
+def _inject_final_draft_into_exec_html(html_output: str, markdown_text: str) -> str:
+    """Prepend a Final Draft section into an executive-reporting HTML page.
+
+    The executive-reporting plugin renders a full HTML document; we patch it
+    after the fact by inserting the section immediately after the opening
+    ``<main>`` tag (or ``<body>`` as a fallback). If neither marker exists,
+    the original HTML is returned unchanged so the brief still saves.
+    """
+    section = _final_draft_to_html(markdown_text)
+    if not section:
+        return html_output
+
+    style_block = (
+        "<style>"
+        ".final-draft{background:#1A1A1A;border:1px solid #A6ACCD;border-radius:12px;"
+        "padding:24px;margin:20px auto;max-width:960px;color:#EBD2BE;font-family:Georgia,serif;}"
+        ".final-draft h2{color:#A6ACCD;margin:0 0 14px;border-bottom:1px solid #242424;padding-bottom:8px;}"
+        ".final-draft .draft-body{max-width:68ch;margin:0 auto;font-size:1.05rem;line-height:1.85;}"
+        ".final-draft .draft-body h1{font-size:1.5rem;text-align:center;margin:0 0 20px;}"
+        ".final-draft .draft-body h2{font-size:1.15rem;border:none;color:#EBD2BE;margin:24px 0 10px;padding:0;}"
+        ".final-draft .draft-body h3{margin:20px 0 8px;color:#A6ACCD;}"
+        ".final-draft .draft-body p{margin:0 0 14px;}"
+        "</style>"
+    )
+
+    for marker in ("<main>", "<main ", "<body>", "<body "):
+        idx = html_output.find(marker)
+        if idx == -1:
+            continue
+        end = html_output.find(">", idx)
+        if end == -1:
+            continue
+        insertion_point = end + 1
+        return (
+            html_output[:insertion_point]
+            + "\n"
+            + style_block
+            + "\n"
+            + section
+            + html_output[insertion_point:]
+        )
+
+    # Fallback: append to end of document if no main/body tag found.
+    return html_output + "\n" + style_block + "\n" + section

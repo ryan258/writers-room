@@ -19,11 +19,18 @@ the web UI form.
 | `mode` | string | `"horror"` | One of `horror`, `noir`, `comedy`, `sci-fi`, `literary`, `fantasy`, `dnd`. |
 | `voice_enabled` | bool | `false` | Experimental TTS playback. Leave off unless verified. |
 | `include_custom_agents` | bool | `true` | Pull active custom agents into the roster. Forced `false` in `dnd` mode. |
+| `produce_final_draft` | bool | `false` | After the last round, run the two-pass Editor (structural → line) over the full transcript and save a publishable short story to `transcripts/web_session_<ts>_final.md`. Forced `false` in `dnd` mode. |
 | `model` | string \| null | `null` | Override the default OpenRouter model. `null` uses `DEFAULT_MODEL`. |
 
 > All demos below leave `model` as `null` so they pick up `DEFAULT_MODEL` from
 > [`lib/personalities.py`](../lib/personalities.py). Set it explicitly if you
 > want to pin a specific OpenRouter model.
+
+> All demos below omit `produce_final_draft`, which means the default (`false`)
+> applies. Add `"produce_final_draft": true` to any non-D&D demo to have the
+> Editor synthesize a publishable short story after the last round — the
+> artifact lands next to the transcript and is embedded as the headline
+> section of the HTML brief.
 
 ---
 

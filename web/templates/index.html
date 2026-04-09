@@ -122,12 +122,17 @@
                             <input type="checkbox" id="include-custom-agents" checked>
                             <span>Include custom agents</span>
                         </label>
+                        <label class="toggle">
+                            <input type="checkbox" id="produce-final-draft">
+                            <span>Produce final draft</span>
+                        </label>
                     </div>
 
                     <div class="mode-notes">
                         <p id="producer-note">Producer scoring stays on for fiction rooms where critique sharpens the draft.</p>
                         <p id="custom-agent-note">Custom agents can join non-D&amp;D rooms if you want a line editor, lore fiend, or continuity cop in the mix.</p>
                         <p id="voice-note">Voice playback is experimental. Configure OpenAI or ElevenLabs keys before enabling it.</p>
+                        <p id="final-draft-note">After the last round, the Editor runs a two-pass synthesis (structural then line) and saves a publishable short story alongside the brief. Adds time and tokens; disabled in D&amp;D mode.</p>
                     </div>
                 </div>
             </div>

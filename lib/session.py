@@ -19,6 +19,7 @@ from .personalities import (
     get_session_opening_prompt,
     is_dnd_mode,
 )
+from .final_draft import generate_final_draft
 from .session_briefing import render_session_brief
 from .session_turns import build_dnd_story_context, generate_dnd_turn, generate_story_turn
 
@@ -38,6 +39,8 @@ class SessionEvent:
     AGENT_RESPONSE = "agent_response"
     PRODUCER_THINKING = "producer_thinking"
     PRODUCER_VERDICT = "producer_verdict"
+    EDITOR_THINKING = "editor_thinking"
+    EDITOR_RESPONSE = "editor_response"
     ROUND_COMPLETED = "round_completed"
     SESSION_COMPLETED = "session_completed"
     ERROR = "error"
@@ -126,6 +129,9 @@ class SessionOrchestrator:
         self.voice_enabled = False
         self.stop_event = threading.Event()
         self.transcript_path = None
+        self.brief_path = None
+        self.final_draft_path = None
+        self.final_draft_markdown = None
 
     def initialize(self, prompt: str, config: Dict[str, Any]):
         self.config = config
@@ -134,10 +140,13 @@ class SessionOrchestrator:
         self.producer_feedback = []
         self.transcript_path = None
         self.brief_path = None
+        self.final_draft_path = None
+        self.final_draft_markdown = None
         story_mode = config.get('mode', 'horror')
         if is_dnd_mode(story_mode):
             self.config['include_custom_agents'] = False
             self.config['producer_enabled'] = False
+            self.config['produce_final_draft'] = False
 
         opening_prompt = get_session_opening_prompt(story_mode, prompt)
         notes = (config.get("notes") or "").strip()
@@ -267,6 +276,7 @@ class SessionOrchestrator:
                  self.transcript_path = self.save_transcript()
              except Exception as exc:
                  self.emit(SessionEvent.ERROR, {'message': f"Transcript save failed: {exc}"})
+             self._maybe_generate_final_draft()
              try:
                  self.brief_path = render_session_brief(
                      prompt=self.config.get('prompt', ''),
@@ -275,6 +285,7 @@ class SessionOrchestrator:
                      conversation_history=self.conversation_history,
                      leaderboard=self._calculate_leaderboard(),
                      transcript_path=self.transcript_path,
+                     final_draft_markdown=self.final_draft_markdown,
                  )
              except Exception:
                  self.brief_path = None
@@ -294,6 +305,8 @@ class SessionOrchestrator:
         self.stop_event.clear()
         self.transcript_path = None
         self.brief_path = None
+        self.final_draft_path = None
+        self.final_draft_markdown = None
 
         self.emit(SessionEvent.SESSION_RESUMED, {
             'additional_rounds': additional_rounds,
@@ -318,6 +331,7 @@ class SessionOrchestrator:
                 self.transcript_path = self.save_transcript()
             except Exception as exc:
                 self.emit(SessionEvent.ERROR, {'message': f"Transcript save failed: {exc}"})
+            self._maybe_generate_final_draft()
             try:
                 self.brief_path = render_session_brief(
                     prompt=self.config.get('prompt', ''),
@@ -326,6 +340,7 @@ class SessionOrchestrator:
                     conversation_history=self.conversation_history,
                     leaderboard=self._calculate_leaderboard(),
                     transcript_path=self.transcript_path,
+                    final_draft_markdown=self.final_draft_markdown,
                 )
             except Exception:
                 self.brief_path = None
@@ -599,12 +614,56 @@ class SessionOrchestrator:
 
         return str(transcript_path)
 
+    def _maybe_generate_final_draft(self) -> None:
+        """Run the two-pass Editor if the toggle is on and mode allows it."""
+        if not self.config.get('produce_final_draft'):
+            return
+        if is_dnd_mode(self.config.get('mode', 'horror')):
+            return
+        if not self.conversation_history:
+            return
+
+        try:
+            markdown = generate_final_draft(
+                config=self.config,
+                conversation_history=self.conversation_history,
+                story_state=self.story_manager.get_state() if self.story_manager else None,
+                emit=self.emit,
+            )
+        except Exception as exc:
+            self.emit(SessionEvent.ERROR, {'message': f"Final draft failed: {exc}"})
+            self.final_draft_markdown = None
+            self.final_draft_path = None
+            return
+
+        self.final_draft_markdown = markdown
+        if markdown and self.transcript_path:
+            try:
+                self.final_draft_path = self._save_final_draft_markdown(
+                    self.transcript_path, markdown
+                )
+            except Exception as exc:
+                self.emit(
+                    SessionEvent.ERROR,
+                    {'message': f"Final draft save failed: {exc}"},
+                )
+                self.final_draft_path = None
+
+    @staticmethod
+    def _save_final_draft_markdown(transcript_path: str, markdown: str) -> str:
+        """Persist the final draft alongside the transcript as ``*_final.md``."""
+        transcript = Path(transcript_path)
+        target = transcript.with_name(f"{transcript.stem}_final.md")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(markdown, encoding="utf-8")
+        return str(target)
+
     def _get_session_summary(self):
         leaderboard = self._calculate_leaderboard()
         winner = leaderboard[0] if leaderboard else None
         worst = leaderboard[-1] if len(leaderboard) > 1 and self.config.get('fire_worst', False) else None
         final_state = self._build_story_state_payload()
-        
+
         return {
             'leaderboard': leaderboard,
             'winner': winner,
@@ -612,4 +671,5 @@ class SessionOrchestrator:
             'story_state': final_state,
             'transcript_path': self.transcript_path,
             'brief_path': getattr(self, 'brief_path', None),
+            'final_draft_path': getattr(self, 'final_draft_path', None),
         }

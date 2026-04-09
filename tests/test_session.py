@@ -297,6 +297,240 @@ def test_parse_producer_json_returns_none_on_bad_json():
     ) is None
 
 
+def test_final_draft_off_by_default(monkeypatch, tmp_path):
+    """Sessions without produce_final_draft don't run the editor."""
+    class DummyAgent:
+        def __init__(self, name, **kwargs):
+            self.name = name
+
+        def generate_response(self, context, story_context=None):
+            return f"{self.name} writes a line."
+
+    monkeypatch.setattr(session_module, "Agent", DummyAgent)
+    monkeypatch.setattr(
+        session_module,
+        "render_session_brief",
+        lambda **kwargs: str(tmp_path / "brief.html"),
+    )
+    called = {"count": 0}
+
+    def fake_generate(**kwargs):
+        called["count"] += 1
+        return "ignored"
+
+    monkeypatch.setattr(session_module, "generate_final_draft", fake_generate)
+
+    events = []
+    orchestrator = session_module.SessionOrchestrator(
+        lambda event, payload: events.append((event, payload))
+    )
+    config = {
+        "mode": "horror",
+        "rounds": 1,
+        "temperature": 0.9,
+        "producer_enabled": False,
+        "voice_enabled": False,
+        "include_custom_agents": False,
+        "prompt": "A locked closet hums at night.",
+        "transcript_dir": str(tmp_path),
+    }
+
+    orchestrator.initialize("A locked closet hums at night.", config)
+    orchestrator.run_session(1)
+
+    assert called["count"] == 0
+    assert orchestrator.final_draft_path is None
+    assert orchestrator.final_draft_markdown is None
+
+    editor_events = [e for e, _ in events if e.startswith("editor_")]
+    assert editor_events == []
+
+    completed = next(
+        payload for event, payload in events
+        if event == session_module.SessionEvent.SESSION_COMPLETED
+    )
+    assert completed["final_draft_path"] is None
+
+
+def test_final_draft_produces_markdown_and_file(monkeypatch, tmp_path):
+    """With the toggle on, the editor runs and the file is saved."""
+    class DummyAgent:
+        def __init__(self, name, **kwargs):
+            self.name = name
+
+        def generate_response(self, context, story_context=None):
+            return f"{self.name} contributes a beat."
+
+    monkeypatch.setattr(session_module, "Agent", DummyAgent)
+    monkeypatch.setattr(
+        session_module,
+        "render_session_brief",
+        lambda **kwargs: str(tmp_path / "brief.html"),
+    )
+
+    expected_markdown = "# The Closet\n\nIt hummed all night, and no one slept."
+
+    def fake_generate(**kwargs):
+        emit = kwargs["emit"]
+        emit("editor_thinking", {"stage": "structural"})
+        emit("editor_response", {"stage": "structural", "preview": "draft", "length": 42})
+        emit("editor_thinking", {"stage": "line"})
+        emit("editor_response", {"stage": "line", "preview": "polished", "length": 50})
+        return expected_markdown
+
+    monkeypatch.setattr(session_module, "generate_final_draft", fake_generate)
+
+    events = []
+    orchestrator = session_module.SessionOrchestrator(
+        lambda event, payload: events.append((event, payload))
+    )
+    config = {
+        "mode": "horror",
+        "rounds": 1,
+        "temperature": 0.9,
+        "producer_enabled": False,
+        "voice_enabled": False,
+        "include_custom_agents": False,
+        "prompt": "A locked closet hums at night.",
+        "transcript_dir": str(tmp_path),
+        "produce_final_draft": True,
+    }
+
+    orchestrator.initialize("A locked closet hums at night.", config)
+    orchestrator.run_session(1)
+
+    assert orchestrator.final_draft_markdown == expected_markdown
+    assert orchestrator.final_draft_path is not None
+    draft_path = Path(orchestrator.final_draft_path)
+    assert draft_path.exists()
+    assert draft_path.suffix == ".md"
+    assert draft_path.stem.endswith("_final")
+    assert draft_path.read_text(encoding="utf-8") == expected_markdown
+
+    editor_events = [e for e, _ in events if e.startswith("editor_")]
+    assert editor_events == [
+        "editor_thinking",
+        "editor_response",
+        "editor_thinking",
+        "editor_response",
+    ]
+
+    completed = next(
+        payload for event, payload in events
+        if event == session_module.SessionEvent.SESSION_COMPLETED
+    )
+    assert completed["final_draft_path"] == str(draft_path)
+
+
+def test_final_draft_disabled_for_dnd(monkeypatch, tmp_path):
+    """D&D mode never runs the editor, even with the toggle on."""
+    class DummyAgent:
+        def __init__(self, name, **kwargs):
+            self.name = name
+
+        def generate_response(self, context, story_context=None):
+            return f"{self.name} takes a turn."
+
+    monkeypatch.setattr(session_module, "Agent", DummyAgent)
+    monkeypatch.setattr(
+        session_module,
+        "render_session_brief",
+        lambda **kwargs: str(tmp_path / "brief.html"),
+    )
+    called = {"count": 0}
+
+    def fake_generate(**kwargs):
+        called["count"] += 1
+        return "should not run"
+
+    monkeypatch.setattr(session_module, "generate_final_draft", fake_generate)
+
+    events = []
+    orchestrator = session_module.SessionOrchestrator(
+        lambda event, payload: events.append((event, payload))
+    )
+    config = {
+        "mode": "dnd",
+        "rounds": 1,
+        "temperature": 0.8,
+        "producer_enabled": False,
+        "voice_enabled": False,
+        "include_custom_agents": False,
+        "prompt": "Recover the ember crown.",
+        "transcript_dir": str(tmp_path),
+        "produce_final_draft": True,
+    }
+
+    orchestrator.initialize("Recover the ember crown.", config)
+    assert orchestrator.config["produce_final_draft"] is False
+
+    orchestrator.run_session(1)
+
+    assert called["count"] == 0
+    assert orchestrator.final_draft_path is None
+    editor_events = [e for e, _ in events if e.startswith("editor_")]
+    assert editor_events == []
+
+
+def test_final_draft_failure_graceful(monkeypatch, tmp_path):
+    """If the editor raises, the session still completes and the brief saves."""
+    class DummyAgent:
+        def __init__(self, name, **kwargs):
+            self.name = name
+
+        def generate_response(self, context, story_context=None):
+            return f"{self.name} writes a line."
+
+    monkeypatch.setattr(session_module, "Agent", DummyAgent)
+    monkeypatch.setattr(
+        session_module,
+        "render_session_brief",
+        lambda **kwargs: str(tmp_path / "brief.html"),
+    )
+
+    def broken_generate(**kwargs):
+        raise RuntimeError("editor exploded")
+
+    monkeypatch.setattr(session_module, "generate_final_draft", broken_generate)
+
+    events = []
+    orchestrator = session_module.SessionOrchestrator(
+        lambda event, payload: events.append((event, payload))
+    )
+    config = {
+        "mode": "horror",
+        "rounds": 1,
+        "temperature": 0.9,
+        "producer_enabled": False,
+        "voice_enabled": False,
+        "include_custom_agents": False,
+        "prompt": "A storm rolls in at dusk.",
+        "transcript_dir": str(tmp_path),
+        "produce_final_draft": True,
+    }
+
+    orchestrator.initialize("A storm rolls in at dusk.", config)
+    orchestrator.run_session(1)
+
+    assert orchestrator.final_draft_markdown is None
+    assert orchestrator.final_draft_path is None
+
+    error_messages = [
+        payload["message"]
+        for event, payload in events
+        if event == session_module.SessionEvent.ERROR
+    ]
+    assert any("Final draft failed" in msg for msg in error_messages)
+
+    completed_events = [
+        payload for event, payload in events
+        if event == session_module.SessionEvent.SESSION_COMPLETED
+    ]
+    assert len(completed_events) == 1
+    assert completed_events[0]["final_draft_path"] is None
+    assert completed_events[0]["transcript_path"] is not None
+
+
 def test_session_orchestrator_producer_prompt_matches_structured_output(monkeypatch):
     class DummyAgent:
         def __init__(self, name, **kwargs):

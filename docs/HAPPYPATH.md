@@ -118,6 +118,11 @@ When all rounds complete:
 - The full transcript is written to `transcripts/session_<timestamp>.txt`
 - A rendered HTML brief is written next to it and surfaced at
   `/briefs/latest`
+- If you enabled **Produce final draft** before launching (non-D&D only),
+  a synthesized short story is written to
+  `transcripts/web_session_<timestamp>_final.md` and served at
+  `/drafts/latest`. The same story is also embedded as the headline
+  section of the HTML brief.
 - The session orchestrator stays in memory so you can call
   `/api/continue` to extend it for more rounds without losing the Story
   State
@@ -198,6 +203,9 @@ The happy path deliberately avoids:
 - **D&D mode for your first run** — it's a different orchestration loop
   (no Producer, different prompt structure). Get a Horror session under
   your belt first.
+- **Final draft synthesis on by default** — `produce_final_draft` is opt-in
+  and costs an extra two Editor passes after the last round. The happy
+  path leaves it off until you've seen a normal session land cleanly.
 - **Multi-tenant use** — the server holds one live session in process
   global state. Don't expose it to more than one concurrent user.
 - **Resuming over a server restart** — sessions are in-memory; restarting

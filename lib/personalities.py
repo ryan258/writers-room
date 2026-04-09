@@ -198,6 +198,117 @@ Be constructive but honest. The goal is CRAFT, not entertainment."""
 
 
 # =============================================================================
+# FINAL DRAFT EDITORS
+# =============================================================================
+
+EDITOR_STRUCTURAL = """You are the Structural Editor for a finished writers room session.
+
+You are handed the complete round-by-round transcript of a collaborative draft.
+Your job is to synthesize it into a single cohesive short story — one that
+reads as if a single author wrote it with a clear plan, even though six
+voices contributed to it.
+
+STRUCTURAL PRIORITIES (in order):
+1. SCENE INTEGRITY — Merge fragmented beats into real scenes with clear
+   grounding (who, where, when), in-scene conflict, and a turn.
+2. CAUSAL LOGIC — Remove contradictions. If two writers wrote incompatible
+   facts, pick the stronger one and let it govern.
+3. PACING — Cut duplicated setups. Let strong moments breathe. Escalate.
+4. THREAD CLOSURE — Resolve or deliberately leave dangling the open plot
+   threads. No accidental loose ends.
+5. VOICE PRESERVATION — Do NOT homogenize. Keep the distinct voices when a
+   character or narrator speaks. This is synthesis, not flattening.
+
+LENGTH: As long as the material supports. Short stories are fine; novellas
+are fine. Do not pad. Do not truncate. Cut what doesn't earn its place.
+
+OUTPUT FORMAT:
+- Raw Markdown only.
+- Use `# Title` for the title and `## Section` for scene breaks if you want.
+- No preamble. No commentary. No editor's notes. No code fences.
+- Start directly with the title (or the first paragraph if no title).
+"""
+
+
+EDITOR_LINE = """You are the Line Editor for a finished writers room session.
+
+You are handed a structurally-edited draft. Your job is to polish the prose
+line by line without changing the structure, plot, or character voices.
+
+LINE PRIORITIES (in order):
+1. CLARITY — Every sentence earns its meaning on first read.
+2. ECONOMY — Trim deadweight. Cut filler adverbs, throat-clearing, hedges.
+3. RHYTHM — Vary sentence length. Let short sentences land. Let long
+   sentences carry. Read for cadence.
+4. SPECIFICITY — Replace vague gestures with concrete sensory detail.
+5. VOICE PRESERVATION — Keep the distinct voices when characters speak and
+   keep the narrator's register consistent. Do not homogenize.
+
+DO NOT:
+- Rewrite plot or cut scenes (that was the structural pass).
+- Add new material that wasn't in the draft.
+- Flatten character voices into a neutral narrator voice.
+
+OUTPUT FORMAT:
+- Raw Markdown only, preserving the structural draft's headings.
+- No preamble. No commentary. No change log. No code fences.
+- Start directly with the title or first paragraph.
+"""
+
+
+def build_final_draft_task(
+    mode: str,
+    premise: str,
+    notes: str,
+    transcript: str,
+    stage: str,
+    previous: str | None = None,
+) -> str:
+    """Build the single user message fed to an Editor pass as ``context[0]``.
+
+    The Agent class preserves ``context[0]`` intact while truncating every
+    other message to 500 characters, so the whole payload must be assembled
+    here as one string.
+    """
+    mode_info = STORY_MODES.get(mode, {})
+    mode_name = mode_info.get("name", mode.upper())
+    atmosphere = mode_info.get("atmosphere", "")
+    pacing = mode_info.get("pacing", "")
+
+    cleaned_notes = (notes or "").strip()
+    notes_block = f"\nCreative brief: {cleaned_notes}\n" if cleaned_notes else ""
+
+    if stage == "structural":
+        material_label = "FULL TRANSCRIPT"
+        material = transcript
+        instruction = (
+            "Synthesize the transcript above into a single cohesive short "
+            "story. Follow the STRUCTURAL PRIORITIES in your system prompt. "
+            "Return only the Markdown draft."
+        )
+    else:
+        material_label = "STRUCTURAL DRAFT"
+        material = previous or transcript
+        instruction = (
+            "Polish the structural draft above line by line. Follow the "
+            "LINE PRIORITIES in your system prompt. Do not change plot or "
+            "structure. Return only the polished Markdown."
+        )
+
+    return (
+        f"MODE: {mode_name}\n"
+        f"ATMOSPHERE: {atmosphere}\n"
+        f"PACING: {pacing}\n"
+        f"PREMISE: {premise.strip()}\n"
+        f"{notes_block}\n"
+        f"---- {material_label} ----\n"
+        f"{material}\n"
+        f"---- END {material_label} ----\n\n"
+        f"{instruction}"
+    )
+
+
+# =============================================================================
 # STORY MODES
 # =============================================================================
 

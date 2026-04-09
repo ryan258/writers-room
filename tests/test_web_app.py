@@ -148,6 +148,49 @@ def test_latest_brief_route_returns_html(monkeypatch, tmp_path):
     brief_path.unlink(missing_ok=True)
 
 
+def test_latest_final_draft_route_returns_markdown(monkeypatch):
+    web_app_module = importlib.import_module("web.app")
+    transcripts_dir = Path(web_app_module.TRANSCRIPTS_DIR)
+    transcripts_dir.mkdir(parents=True, exist_ok=True)
+    draft_path = transcripts_dir / "test_latest_final.md"
+    draft_path.write_text("# Final Draft\n\nIt hummed all night.", encoding="utf-8")
+    monkeypatch.setitem(
+        web_app_module.current_session, "last_final_draft", str(draft_path)
+    )
+
+    with TestClient(web_app_module.app) as client:
+        response = client.get("/drafts/latest")
+
+    assert response.status_code == 200
+    assert "Final Draft" in response.text
+    assert "It hummed all night." in response.text
+    draft_path.unlink(missing_ok=True)
+
+
+def test_latest_final_draft_route_rejects_paths_outside_transcripts(monkeypatch, tmp_path):
+    web_app_module = importlib.import_module("web.app")
+    draft_path = tmp_path / "rogue_final.md"
+    draft_path.write_text("# Not allowed", encoding="utf-8")
+    monkeypatch.setitem(
+        web_app_module.current_session, "last_final_draft", str(draft_path)
+    )
+
+    with TestClient(web_app_module.app) as client:
+        response = client.get("/drafts/latest")
+
+    assert response.status_code == 403
+
+
+def test_latest_final_draft_route_returns_404_when_missing(monkeypatch):
+    web_app_module = importlib.import_module("web.app")
+    monkeypatch.setitem(web_app_module.current_session, "last_final_draft", None)
+
+    with TestClient(web_app_module.app) as client:
+        response = client.get("/drafts/latest")
+
+    assert response.status_code == 404
+
+
 def test_latest_brief_route_rejects_paths_outside_transcripts(monkeypatch, tmp_path):
     web_app_module = importlib.import_module("web.app")
     brief_path = tmp_path / "latest_brief.html"
@@ -158,6 +201,101 @@ def test_latest_brief_route_rejects_paths_outside_transcripts(monkeypatch, tmp_p
         response = client.get("/briefs/latest")
 
     assert response.status_code == 403
+
+
+def test_status_reports_last_final_draft(monkeypatch):
+    web_app_module = importlib.import_module("web.app")
+    monkeypatch.setitem(web_app_module.current_session, "active", False)
+    monkeypatch.setitem(web_app_module.current_session, "orchestrator", None)
+    monkeypatch.setitem(
+        web_app_module.current_session,
+        "last_transcript",
+        "transcripts/web_session_20260409_120000.txt",
+    )
+    monkeypatch.setitem(
+        web_app_module.current_session,
+        "last_brief",
+        "transcripts/web_session_20260409_120000_brief.html",
+    )
+    monkeypatch.setitem(
+        web_app_module.current_session,
+        "last_final_draft",
+        "transcripts/web_session_20260409_120000_final.md",
+    )
+
+    with TestClient(web_app_module.app) as client:
+        response = client.get("/api/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["last_final_draft"] == "transcripts/web_session_20260409_120000_final.md"
+
+
+def test_start_api_accepts_produce_final_draft_toggle(monkeypatch):
+    web_app_module = importlib.import_module("web.app")
+    captured = {}
+
+    class DummyThread:
+        def __init__(self, target, args, daemon):
+            captured["args"] = args
+
+        def start(self):
+            captured["started"] = True
+
+    monkeypatch.setattr(web_app_module.threading, "Thread", DummyThread)
+    monkeypatch.setitem(web_app_module.current_session, "active", False)
+
+    with TestClient(web_app_module.app) as client:
+        response = client.post(
+            "/api/start",
+            json={
+                "prompt": "A lighthouse keeper hears her own voice on the radio.",
+                "notes": "Quiet dread, no monsters.",
+                "rounds": 2,
+                "temperature": 0.9,
+                "producer_enabled": True,
+                "fire_worst": False,
+                "mode": "horror",
+                "voice_enabled": False,
+                "include_custom_agents": False,
+                "produce_final_draft": True,
+            },
+        )
+
+    assert response.status_code == 200
+    _, _, config = captured["args"]
+    assert config["produce_final_draft"] is True
+    assert config["mode"] == "horror"
+
+
+def test_start_api_forces_dnd_to_drop_final_draft(monkeypatch):
+    web_app_module = importlib.import_module("web.app")
+    captured = {}
+
+    class DummyThread:
+        def __init__(self, target, args, daemon):
+            captured["args"] = args
+
+        def start(self):
+            captured["started"] = True
+
+    monkeypatch.setattr(web_app_module.threading, "Thread", DummyThread)
+    monkeypatch.setitem(web_app_module.current_session, "active", False)
+
+    with TestClient(web_app_module.app) as client:
+        response = client.post(
+            "/api/start",
+            json={
+                "prompt": "Recover the ember crown.",
+                "rounds": 1,
+                "mode": "dnd",
+                "produce_final_draft": True,
+            },
+        )
+
+    assert response.status_code == 200
+    _, _, config = captured["args"]
+    assert config["produce_final_draft"] is False
 
 
 def test_start_api_forces_dnd_web_sessions_into_app_safe_config(monkeypatch):

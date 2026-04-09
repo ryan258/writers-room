@@ -27,6 +27,7 @@ Comedy.
 | Fire the worst performer | toggle | Forced **off** in D&D |
 | Enable voice playback | toggle | Experimental |
 | Include custom agents | toggle | Forced **off** in D&D |
+| Produce final draft | toggle | Forced **off** in D&D |
 
 **For Fantasy / Horror / Literary / Noir / Sci-Fi / Comedy:**
 
@@ -40,6 +41,7 @@ Comedy.
 | Fire the worst performer | toggle | Requires Producer on |
 | Enable voice playback | toggle | Experimental |
 | Include custom agents | toggle | On if you want custom voices in the mix |
+| Produce final draft | toggle | Off by default. Turn on to have the two-pass Editor synthesize a publishable short story after the last round. Adds time and tokens. |
 
 > Defaults: any field not listed in a demo means "leave the form's default."
 > Demos that say `Enable Producer scoring: on` flip a toggle that ships off.

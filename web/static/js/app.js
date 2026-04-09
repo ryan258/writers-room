@@ -115,7 +115,7 @@ function scheduleReconnect() {
   }, delay);
 }
 
-function showSessionNote(message, linkHref = null, linkLabel = "Open") {
+function showSessionNote(message, links = []) {
   const note = document.getElementById("session-note");
   if (!note) {
     return;
@@ -126,17 +126,52 @@ function showSessionNote(message, linkHref = null, linkLabel = "Open") {
   messageNode.textContent = message;
   note.appendChild(messageNode);
 
-  if (linkHref) {
-    note.appendChild(document.createTextNode(" "));
-    const link = document.createElement("a");
-    link.href = linkHref;
-    link.textContent = linkLabel;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    note.appendChild(link);
-  }
+  const normalized = Array.isArray(links)
+    ? links
+    : links && links.href
+      ? [links]
+      : [];
+
+  normalized
+    .filter((entry) => entry && entry.href)
+    .forEach((entry) => {
+      note.appendChild(document.createTextNode(" "));
+      const link = document.createElement("a");
+      link.href = entry.href;
+      link.textContent = entry.label || "Open";
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      note.appendChild(link);
+    });
 
   note.classList.remove("hidden");
+}
+
+function buildArtifactLinks({ briefPath, finalDraftPath }) {
+  const links = [];
+  if (briefPath) {
+    links.push({ href: "/briefs/latest", label: "Open brief" });
+  }
+  if (finalDraftPath) {
+    links.push({ href: "/drafts/latest", label: "Open final draft" });
+  }
+  return links;
+}
+
+function artifactNoteMessage({ briefPath, finalDraftPath, transcriptPath }) {
+  if (finalDraftPath && briefPath) {
+    return "Session artifacts saved. Final draft ready.";
+  }
+  if (finalDraftPath) {
+    return "Final draft saved. Brief rendering was skipped or failed.";
+  }
+  if (briefPath) {
+    return "Session artifacts saved.";
+  }
+  if (transcriptPath) {
+    return `Transcript saved to ${transcriptPath}`;
+  }
+  return "Session ended without saved artifacts.";
 }
 
 function clearSessionNote() {
@@ -410,25 +445,42 @@ function updateModeSelection(mode) {
 
   const producerEnabled = document.getElementById("producer-enabled");
   const includeCustomAgents = document.getElementById("include-custom-agents");
+  const produceFinalDraft = document.getElementById("produce-final-draft");
   const producerNote = document.getElementById("producer-note");
   const customAgentNote = document.getElementById("custom-agent-note");
+  const finalDraftNote = document.getElementById("final-draft-note");
 
   if (currentMode === "dnd") {
     producerEnabled.checked = false;
     producerEnabled.disabled = true;
     includeCustomAgents.checked = false;
     includeCustomAgents.disabled = true;
+    if (produceFinalDraft) {
+      produceFinalDraft.checked = false;
+      produceFinalDraft.disabled = true;
+    }
     producerNote.textContent =
       "D&D mode runs without the Producer. The DM and party own the pressure without an external judge.";
     customAgentNote.textContent =
       "D&D mode keeps the table coherent: one DM, one fixed party, no drop-in custom seats.";
+    if (finalDraftNote) {
+      finalDraftNote.textContent =
+        "D&D mode doesn't produce a synthesized short story. The transcript and encounter log are the artifact.";
+    }
   } else {
     producerEnabled.disabled = false;
     includeCustomAgents.disabled = false;
+    if (produceFinalDraft) {
+      produceFinalDraft.disabled = false;
+    }
     producerNote.textContent =
       "Producer scoring stays on for fiction rooms where critique sharpens the draft.";
     customAgentNote.textContent =
       "Custom agents can join non-D&D rooms if you want a line editor, lore fiend, or continuity cop in the mix.";
+    if (finalDraftNote) {
+      finalDraftNote.textContent =
+        "After the last round, the Editor runs a two-pass synthesis (structural then line) and saves a publishable short story alongside the brief. Adds time and tokens.";
+    }
   }
 
   applyModeCopy();
@@ -686,6 +738,42 @@ function handleEvent(eventName, data) {
       }
       break;
     }
+    case "editor_thinking": {
+      const stage = data.stage || "structural";
+      const title =
+        stage === "structural"
+          ? "Editor drafting structure..."
+          : "Editor polishing prose...";
+      updateStatusBanner(
+        true,
+        title,
+        stage === "structural"
+          ? "The Structural Editor is synthesizing the transcript into a cohesive draft."
+          : "The Line Editor is polishing the structural draft.",
+      );
+      appendFeedEntry(
+        "system",
+        title,
+        stage === "structural"
+          ? "Pass 1: merging scenes, fixing continuity, resolving threads."
+          : "Pass 2: tightening prose, trimming filler, preserving voices.",
+      );
+      break;
+    }
+    case "editor_response": {
+      const stage = data.stage || "structural";
+      const label =
+        stage === "structural" ? "Structural pass complete" : "Line pass complete";
+      const preview = (data.preview || "").trim();
+      const length = data.length || 0;
+      appendFeedEntry(
+        "turn",
+        label,
+        preview ? preview + (length > preview.length ? "..." : "") : "(no preview)",
+        length ? `${length} characters` : "",
+      );
+      break;
+    }
     case "producer_thinking": {
       const { card, status } = ensureAgentCard(
         "The Producer",
@@ -769,10 +857,16 @@ function handleEvent(eventName, data) {
       if (data.worst) {
         showFired(data.worst);
       }
-      if (data.brief_path) {
-        showSessionNote("Session artifacts saved.", "/briefs/latest", "Open brief");
-      } else if (data.transcript_path) {
-        showSessionNote(`Transcript saved to ${data.transcript_path}`);
+      {
+        const artifactState = {
+          briefPath: data.brief_path,
+          finalDraftPath: data.final_draft_path,
+          transcriptPath: data.transcript_path,
+        };
+        const links = buildArtifactLinks(artifactState);
+        if (links.length || data.transcript_path) {
+          showSessionNote(artifactNoteMessage(artifactState), links);
+        }
       }
       appendFeedEntry(
         "system",
@@ -828,12 +922,18 @@ async function rehydrateSessionState() {
     setStartButtonState(false);
     updateStatusBanner(false);
 
-    if (status.last_brief) {
-      showSessionNote("Session artifacts saved.", "/briefs/latest", "Open brief");
-    } else if (status.last_transcript) {
-      showSessionNote(`Transcript saved to ${status.last_transcript}`);
-    } else {
-      clearSessionNote();
+    {
+      const artifactState = {
+        briefPath: status.last_brief,
+        finalDraftPath: status.last_final_draft,
+        transcriptPath: status.last_transcript,
+      };
+      const links = buildArtifactLinks(artifactState);
+      if (links.length || status.last_transcript) {
+        showSessionNote(artifactNoteMessage(artifactState), links);
+      } else {
+        clearSessionNote();
+      }
     }
   } catch (error) {
     console.error("Failed to rehydrate session state:", error);
@@ -855,6 +955,10 @@ async function startSession() {
   const includeCustomAgents = document.getElementById(
     "include-custom-agents",
   ).checked;
+  const produceFinalDraftEl = document.getElementById("produce-final-draft");
+  const produceFinalDraft = produceFinalDraftEl
+    ? produceFinalDraftEl.checked
+    : false;
 
   if (!prompt) {
     showSessionNote("Give the room a premise before you launch it.");
@@ -883,6 +987,7 @@ async function startSession() {
         fire_worst: fireWorst,
         voice_enabled: voiceEnabled,
         include_custom_agents: includeCustomAgents,
+        produce_final_draft: produceFinalDraft,
       }),
     });
 

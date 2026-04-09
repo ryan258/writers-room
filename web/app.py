@@ -66,6 +66,7 @@ current_session: Dict[str, Any] = {
     "active": False,
     "last_transcript": None,
     "last_brief": None,
+    "last_final_draft": None,
 }
 
 # Custom agent manager
@@ -123,6 +124,25 @@ def _is_allowed_brief_path(candidate: Path) -> bool:
     return True
 
 
+def _is_allowed_final_draft_path(candidate: Path) -> bool:
+    """Only serve final-draft Markdown files from the transcripts directory."""
+    try:
+        resolved = candidate.resolve()
+        transcripts_root = TRANSCRIPTS_DIR.resolve()
+    except OSError:
+        return False
+
+    if resolved.suffix.lower() != ".md":
+        return False
+
+    try:
+        resolved.relative_to(transcripts_root)
+    except ValueError:
+        return False
+
+    return True
+
+
 def emit_event(event: str, data: Dict[str, Any]) -> None:
     """Thread-safe event emitter for SessionOrchestrator."""
     loop = getattr(app.state, "loop", None)
@@ -148,6 +168,7 @@ def run_session_thread(prompt: str, rounds: int, config: Dict[str, Any]) -> None
         current_session["active"] = True
         current_session["last_transcript"] = None
         current_session["last_brief"] = None
+        current_session["last_final_draft"] = None
         orchestrator = SessionOrchestrator(emit_event)
         current_session["orchestrator"] = orchestrator
 
@@ -155,6 +176,9 @@ def run_session_thread(prompt: str, rounds: int, config: Dict[str, Any]) -> None
         orchestrator.run_session(rounds)
         current_session["last_transcript"] = orchestrator.transcript_path
         current_session["last_brief"] = getattr(orchestrator, "brief_path", None)
+        current_session["last_final_draft"] = getattr(
+            orchestrator, "final_draft_path", None
+        )
     except Exception as exc:
         emit_event(SessionEvent.ERROR, {"message": str(exc)})
     finally:
@@ -171,6 +195,7 @@ class StartRequest(BaseModel):
     mode: str = "horror"
     voice_enabled: bool = False
     include_custom_agents: bool = True
+    produce_final_draft: bool = False
     model: Optional[str] = None
 
 
@@ -238,6 +263,7 @@ async def start_session(req: StartRequest):
     if req.mode == "dnd":
         config["producer_enabled"] = False
         config["include_custom_agents"] = False
+        config["produce_final_draft"] = False
 
     # Start session in background thread
     thread = threading.Thread(
@@ -257,9 +283,13 @@ def continue_session_thread(orchestrator: SessionOrchestrator, additional_rounds
         current_session["active"] = True
         current_session["last_transcript"] = None
         current_session["last_brief"] = None
+        current_session["last_final_draft"] = None
         orchestrator.resume(additional_rounds)
         current_session["last_transcript"] = orchestrator.transcript_path
         current_session["last_brief"] = getattr(orchestrator, "brief_path", None)
+        current_session["last_final_draft"] = getattr(
+            orchestrator, "final_draft_path", None
+        )
     except Exception as exc:
         emit_event(SessionEvent.ERROR, {"message": str(exc)})
     finally:
@@ -316,6 +346,7 @@ async def get_status():
         "agent_roster": agent_roster,
         "last_transcript": current_session.get("last_transcript"),
         "last_brief": current_session.get("last_brief"),
+        "last_final_draft": current_session.get("last_final_draft"),
     }
 
 
@@ -334,6 +365,23 @@ async def get_latest_brief():
         return JSONResponse({"error": "The latest session brief could not be found on disk."}, status_code=404)
 
     return FileResponse(str(html_path), media_type="text/html")
+
+
+@app.get("/drafts/latest", response_class=FileResponse)
+async def get_latest_final_draft():
+    """Return the most recent generated final-draft Markdown file."""
+    draft_path = current_session.get("last_final_draft")
+    if not draft_path:
+        return JSONResponse({"error": "No final draft has been generated yet."}, status_code=404)
+
+    md_path = Path(draft_path)
+    if not _is_allowed_final_draft_path(md_path):
+        return JSONResponse({"error": "Invalid final draft path."}, status_code=403)
+
+    if not md_path.exists():
+        return JSONResponse({"error": "The latest final draft could not be found on disk."}, status_code=404)
+
+    return FileResponse(str(md_path), media_type="text/markdown")
 
 
 @app.get("/api/modes")
