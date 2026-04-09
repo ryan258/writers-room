@@ -228,7 +228,14 @@ class SessionOrchestrator:
         producer = None
         if producer_enabled:
              try:
-                producer_prompt = PRODUCER + f"\n\nMode-specific focus: {get_producer_mode_criteria(story_mode)}"
+                producer_prompt = (
+                    PRODUCER
+                    + "\n\nWhen structured output is requested, respond with a JSON object only."
+                    + '\nUse this shape: {"assessment": "2-3 sentence overview", "scores": {"Exact Writer Name": 7}}.'
+                    + "\nUse the exact writer names provided in the request as score keys and integer values from 1 to 10."
+                    + "\nDo not include markdown fences or extra commentary outside the JSON object."
+                    + f"\n\nMode-specific focus: {get_producer_mode_criteria(story_mode)}"
+                )
                 producer = Agent(
                     name="The Producer",
                     model=model_override,

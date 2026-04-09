@@ -1,6 +1,7 @@
 from urllib import error as urllib_error
 
 import main as main_module
+from lib import custom_agents as custom_agents_module
 from lib.personalities import DEFAULT_MODEL, get_agent_roster
 from lib.story_state import StoryStateManager
 from lib.session_turns import (
@@ -163,3 +164,20 @@ def test_save_transcript_uses_round_grouping_for_dnd(tmp_path):
     assert "ADVENTURE HOOK: The manor has begun to breathe." in text
     assert "ROUND 1" in text
     assert "[USER]" not in text
+
+
+def test_main_create_agent_mode_imports_lib_custom_agents(monkeypatch):
+    called = {}
+
+    class Args:
+        create_agent = True
+
+    def fake_interactive_create_agent():
+        called["interactive"] = True
+
+    monkeypatch.setattr(main_module, "parse_args", lambda: Args())
+    monkeypatch.setattr(custom_agents_module, "interactive_create_agent", fake_interactive_create_agent)
+
+    main_module.main()
+
+    assert called["interactive"] is True

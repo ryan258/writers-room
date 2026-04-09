@@ -554,7 +554,7 @@ def main():
 
     # Handle custom agent creation mode
     if args.create_agent:
-        from custom_agents import interactive_create_agent
+        from lib.custom_agents import interactive_create_agent
         interactive_create_agent()
         return
 

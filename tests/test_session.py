@@ -295,3 +295,36 @@ def test_parse_producer_json_returns_none_on_bad_json():
     assert session_module.SessionOrchestrator._parse_producer_json(
         '{"assessment": "ok"}', ["A"]
     ) is None
+
+
+def test_session_orchestrator_producer_prompt_matches_structured_output(monkeypatch):
+    class DummyAgent:
+        def __init__(self, name, **kwargs):
+            self.name = name
+            self.system_prompt = kwargs["system_prompt"]
+            self.response_format = kwargs.get("response_format")
+
+        def generate_response(self, context, story_context=None):
+            return f"{self.name} contributes."
+
+    monkeypatch.setattr(session_module, "Agent", DummyAgent)
+
+    orchestrator = session_module.SessionOrchestrator(lambda *_: None)
+    orchestrator.initialize(
+        "A ship arrives empty.",
+        {
+            "mode": "horror",
+            "rounds": 1,
+            "temperature": 0.9,
+            "producer_enabled": True,
+            "voice_enabled": False,
+            "include_custom_agents": False,
+            "prompt": "A ship arrives empty.",
+        },
+    )
+
+    assert orchestrator.producer is not None
+    assert orchestrator.producer.response_format == {"type": "json_object"}
+    assert "respond with a JSON object only" in orchestrator.producer.system_prompt
+    assert '"assessment"' in orchestrator.producer.system_prompt
+    assert '"scores"' in orchestrator.producer.system_prompt

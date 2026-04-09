@@ -390,6 +390,12 @@ async def create_custom_agent(payload: AgentCreate):
     }
 
 
+@app.get("/api/agents/templates")
+async def get_agent_templates():
+    """Get available agent templates."""
+    return list_templates()
+
+
 @app.get("/api/agents/{agent_id}")
 async def get_custom_agent(agent_id: str):
     """Get a specific custom agent."""
@@ -439,12 +445,6 @@ async def delete_custom_agent(agent_id: str):
     if not success:
         return JSONResponse({"error": "Agent not found or could not be deleted"}, status_code=404)
     return {"status": "deleted"}
-
-
-@app.get("/api/agents/templates")
-async def get_agent_templates():
-    """Get available agent templates."""
-    return list_templates()
 
 
 # =============================================================================

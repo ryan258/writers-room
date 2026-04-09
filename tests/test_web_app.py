@@ -33,6 +33,33 @@ def test_agents_page_renders():
     assert "/static/css/style.css" in response.text
 
 
+def test_agent_templates_route_is_not_shadowed():
+    web_app_module = importlib.import_module("web.app")
+
+    with TestClient(web_app_module.app) as client:
+        response = client.get("/api/agents/templates")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "literary_master" in payload
+    assert payload["literary_master"]["name"] == "Literary Master"
+
+
+def test_agents_page_uses_defined_theme_tokens():
+    web_app_module = importlib.import_module("web.app")
+
+    with TestClient(web_app_module.app) as client:
+        response = client.get("/agents")
+
+    assert response.status_code == 200
+    assert "--border-color" not in response.text
+    assert "--accent-green" not in response.text
+    assert "--accent-red" not in response.text
+    assert "var(--border)" in response.text
+    assert "var(--success)" in response.text
+    assert "var(--error)" in response.text
+
+
 def test_runtime_has_websocket_transport():
     assert importlib.util.find_spec("websockets") or importlib.util.find_spec("wsproto")
 
