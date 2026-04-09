@@ -313,12 +313,18 @@ def test_final_draft_off_by_default(monkeypatch, tmp_path):
         lambda **kwargs: str(tmp_path / "brief.html"),
     )
     called = {"count": 0}
+    pipeline_called = {"count": 0}
 
     def fake_generate(**kwargs):
         called["count"] += 1
         return "ignored"
 
+    def fake_pipeline(**kwargs):
+        pipeline_called["count"] += 1
+        return str(tmp_path / "pipelines" / "ignored")
+
     monkeypatch.setattr(session_module, "generate_final_draft", fake_generate)
+    monkeypatch.setattr(session_module, "generate_pipeline_report_from_draft", fake_pipeline)
 
     events = []
     orchestrator = session_module.SessionOrchestrator(
@@ -339,8 +345,10 @@ def test_final_draft_off_by_default(monkeypatch, tmp_path):
     orchestrator.run_session(1)
 
     assert called["count"] == 0
+    assert pipeline_called["count"] == 0
     assert orchestrator.final_draft_path is None
     assert orchestrator.final_draft_markdown is None
+    assert orchestrator.pipeline_dir is None
 
     editor_events = [e for e, _ in events if e.startswith("editor_")]
     assert editor_events == []
@@ -350,6 +358,7 @@ def test_final_draft_off_by_default(monkeypatch, tmp_path):
         if event == session_module.SessionEvent.SESSION_COMPLETED
     )
     assert completed["final_draft_path"] is None
+    assert completed["pipeline_dir"] is None
 
 
 def test_final_draft_produces_markdown_and_file(monkeypatch, tmp_path):
@@ -378,7 +387,14 @@ def test_final_draft_produces_markdown_and_file(monkeypatch, tmp_path):
         emit("editor_response", {"stage": "line", "preview": "polished", "length": 50})
         return expected_markdown
 
+    def fake_pipeline(**kwargs):
+        output_dir = Path(kwargs["output_dir"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "index.md").write_text("# Pipeline\n\nReady.", encoding="utf-8")
+        return str(output_dir)
+
     monkeypatch.setattr(session_module, "generate_final_draft", fake_generate)
+    monkeypatch.setattr(session_module, "generate_pipeline_report_from_draft", fake_pipeline)
 
     events = []
     orchestrator = session_module.SessionOrchestrator(
@@ -393,6 +409,8 @@ def test_final_draft_produces_markdown_and_file(monkeypatch, tmp_path):
         "include_custom_agents": False,
         "prompt": "A locked closet hums at night.",
         "transcript_dir": str(tmp_path),
+        "final_dir": str(tmp_path / "final"),
+        "pipeline_dir": str(tmp_path / "pipelines"),
         "produce_final_draft": True,
     }
 
@@ -405,7 +423,13 @@ def test_final_draft_produces_markdown_and_file(monkeypatch, tmp_path):
     assert draft_path.exists()
     assert draft_path.suffix == ".md"
     assert draft_path.stem.endswith("_final")
+    assert draft_path.parent == tmp_path / "final"
     assert draft_path.read_text(encoding="utf-8") == expected_markdown
+    assert orchestrator.pipeline_dir is not None
+    pipeline_dir = Path(orchestrator.pipeline_dir)
+    assert pipeline_dir.is_dir()
+    assert pipeline_dir.parent == tmp_path / "pipelines"
+    assert (pipeline_dir / "index.md").exists()
 
     editor_events = [e for e, _ in events if e.startswith("editor_")]
     assert editor_events == [
@@ -420,6 +444,7 @@ def test_final_draft_produces_markdown_and_file(monkeypatch, tmp_path):
         if event == session_module.SessionEvent.SESSION_COMPLETED
     )
     assert completed["final_draft_path"] == str(draft_path)
+    assert completed["pipeline_dir"] == str(pipeline_dir)
 
 
 def test_final_draft_disabled_for_dnd(monkeypatch, tmp_path):
@@ -438,12 +463,18 @@ def test_final_draft_disabled_for_dnd(monkeypatch, tmp_path):
         lambda **kwargs: str(tmp_path / "brief.html"),
     )
     called = {"count": 0}
+    pipeline_called = {"count": 0}
 
     def fake_generate(**kwargs):
         called["count"] += 1
         return "should not run"
 
+    def fake_pipeline(**kwargs):
+        pipeline_called["count"] += 1
+        return str(tmp_path / "pipelines" / "ignored")
+
     monkeypatch.setattr(session_module, "generate_final_draft", fake_generate)
+    monkeypatch.setattr(session_module, "generate_pipeline_report_from_draft", fake_pipeline)
 
     events = []
     orchestrator = session_module.SessionOrchestrator(
@@ -467,7 +498,9 @@ def test_final_draft_disabled_for_dnd(monkeypatch, tmp_path):
     orchestrator.run_session(1)
 
     assert called["count"] == 0
+    assert pipeline_called["count"] == 0
     assert orchestrator.final_draft_path is None
+    assert orchestrator.pipeline_dir is None
     editor_events = [e for e, _ in events if e.startswith("editor_")]
     assert editor_events == []
 
@@ -487,11 +520,17 @@ def test_final_draft_failure_graceful(monkeypatch, tmp_path):
         "render_session_brief",
         lambda **kwargs: str(tmp_path / "brief.html"),
     )
+    pipeline_called = {"count": 0}
 
     def broken_generate(**kwargs):
         raise RuntimeError("editor exploded")
 
+    def fake_pipeline(**kwargs):
+        pipeline_called["count"] += 1
+        return str(tmp_path / "pipelines" / "ignored")
+
     monkeypatch.setattr(session_module, "generate_final_draft", broken_generate)
+    monkeypatch.setattr(session_module, "generate_pipeline_report_from_draft", fake_pipeline)
 
     events = []
     orchestrator = session_module.SessionOrchestrator(
@@ -514,6 +553,8 @@ def test_final_draft_failure_graceful(monkeypatch, tmp_path):
 
     assert orchestrator.final_draft_markdown is None
     assert orchestrator.final_draft_path is None
+    assert orchestrator.pipeline_dir is None
+    assert pipeline_called["count"] == 0
 
     error_messages = [
         payload["message"]
@@ -528,7 +569,56 @@ def test_final_draft_failure_graceful(monkeypatch, tmp_path):
     ]
     assert len(completed_events) == 1
     assert completed_events[0]["final_draft_path"] is None
+    assert completed_events[0]["pipeline_dir"] is None
     assert completed_events[0]["transcript_path"] is not None
+
+
+def test_brief_render_failure_emits_error_and_session_still_completes(monkeypatch, tmp_path):
+    class DummyAgent:
+        def __init__(self, name, **kwargs):
+            self.name = name
+
+        def generate_response(self, context, story_context=None):
+            return f"{self.name} writes a line."
+
+    monkeypatch.setattr(session_module, "Agent", DummyAgent)
+    monkeypatch.setattr(
+        session_module,
+        "render_session_brief",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("brief exploded")),
+    )
+
+    events = []
+    orchestrator = session_module.SessionOrchestrator(
+        lambda event, payload: events.append((event, payload))
+    )
+    config = {
+        "mode": "horror",
+        "rounds": 1,
+        "temperature": 0.9,
+        "producer_enabled": False,
+        "voice_enabled": False,
+        "include_custom_agents": False,
+        "prompt": "The floor remembers footsteps.",
+        "transcript_dir": str(tmp_path),
+    }
+
+    orchestrator.initialize("The floor remembers footsteps.", config)
+    orchestrator.run_session(1)
+
+    error_messages = [
+        payload["message"]
+        for event, payload in events
+        if event == session_module.SessionEvent.ERROR
+    ]
+    assert any("Brief render failed" in msg for msg in error_messages)
+
+    completed = next(
+        payload for event, payload in events
+        if event == session_module.SessionEvent.SESSION_COMPLETED
+    )
+    assert completed["brief_path"] is None
+    assert completed["transcript_path"] is not None
 
 
 def test_session_orchestrator_producer_prompt_matches_structured_output(monkeypatch):

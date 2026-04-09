@@ -150,9 +150,9 @@ def test_latest_brief_route_returns_html(monkeypatch, tmp_path):
 
 def test_latest_final_draft_route_returns_markdown(monkeypatch):
     web_app_module = importlib.import_module("web.app")
-    transcripts_dir = Path(web_app_module.TRANSCRIPTS_DIR)
-    transcripts_dir.mkdir(parents=True, exist_ok=True)
-    draft_path = transcripts_dir / "test_latest_final.md"
+    final_dir = Path(web_app_module.FINAL_DIR)
+    final_dir.mkdir(parents=True, exist_ok=True)
+    draft_path = final_dir / "test_latest_final.md"
     draft_path.write_text("# Final Draft\n\nIt hummed all night.", encoding="utf-8")
     monkeypatch.setitem(
         web_app_module.current_session, "last_final_draft", str(draft_path)
@@ -220,7 +220,7 @@ def test_status_reports_last_final_draft(monkeypatch):
     monkeypatch.setitem(
         web_app_module.current_session,
         "last_final_draft",
-        "transcripts/web_session_20260409_120000_final.md",
+        "final/260409_midnight-bell_final.md",
     )
 
     with TestClient(web_app_module.app) as client:
@@ -228,7 +228,7 @@ def test_status_reports_last_final_draft(monkeypatch):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["last_final_draft"] == "transcripts/web_session_20260409_120000_final.md"
+    assert payload["last_final_draft"] == "final/260409_midnight-bell_final.md"
 
 
 def test_start_api_accepts_produce_final_draft_toggle(monkeypatch):

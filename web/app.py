@@ -23,6 +23,8 @@ from pydantic import BaseModel, Field
 # Add repo root to path for lib imports
 ROOT_DIR = Path(__file__).resolve().parents[1]
 TRANSCRIPTS_DIR = ROOT_DIR / "transcripts"
+FINAL_DIR = ROOT_DIR / "final"
+PIPELINES_DIR = ROOT_DIR / "pipelines"
 sys.path.append(str(ROOT_DIR))
 
 from lib.custom_agents import CustomAgentManager, CustomAgent, list_templates
@@ -67,6 +69,7 @@ current_session: Dict[str, Any] = {
     "last_transcript": None,
     "last_brief": None,
     "last_final_draft": None,
+    "last_pipeline_dir": None,
 }
 
 # Custom agent manager
@@ -125,14 +128,35 @@ def _is_allowed_brief_path(candidate: Path) -> bool:
 
 
 def _is_allowed_final_draft_path(candidate: Path) -> bool:
-    """Only serve final-draft Markdown files from the transcripts directory."""
+    """Only serve final-draft Markdown files from approved artifact directories."""
+    try:
+        resolved = candidate.resolve()
+        allowed_roots = [TRANSCRIPTS_DIR.resolve(), FINAL_DIR.resolve()]
+    except OSError:
+        return False
+
+    if resolved.suffix.lower() != ".md":
+        return False
+
+    for root in allowed_roots:
+        try:
+            resolved.relative_to(root)
+            return True
+        except ValueError:
+            continue
+
+    return False
+
+
+def _is_allowed_transcript_path(candidate: Path) -> bool:
+    """Only serve transcript text files from the transcripts directory."""
     try:
         resolved = candidate.resolve()
         transcripts_root = TRANSCRIPTS_DIR.resolve()
     except OSError:
         return False
 
-    if resolved.suffix.lower() != ".md":
+    if resolved.suffix.lower() != ".txt":
         return False
 
     try:
@@ -141,6 +165,25 @@ def _is_allowed_final_draft_path(candidate: Path) -> bool:
         return False
 
     return True
+
+
+def _resolve_pipeline_index(pipeline_dir: str | Path) -> Path | None:
+    """Return the ``index.md`` path for a pipeline directory, if it's allowed."""
+    try:
+        resolved_dir = Path(pipeline_dir).resolve()
+        pipelines_root = PIPELINES_DIR.resolve()
+    except OSError:
+        return None
+
+    try:
+        resolved_dir.relative_to(pipelines_root)
+    except ValueError:
+        return None
+
+    index_path = resolved_dir / "index.md"
+    if not index_path.exists():
+        return None
+    return index_path
 
 
 def emit_event(event: str, data: Dict[str, Any]) -> None:
@@ -169,6 +212,7 @@ def run_session_thread(prompt: str, rounds: int, config: Dict[str, Any]) -> None
         current_session["last_transcript"] = None
         current_session["last_brief"] = None
         current_session["last_final_draft"] = None
+        current_session["last_pipeline_dir"] = None
         orchestrator = SessionOrchestrator(emit_event)
         current_session["orchestrator"] = orchestrator
 
@@ -178,6 +222,9 @@ def run_session_thread(prompt: str, rounds: int, config: Dict[str, Any]) -> None
         current_session["last_brief"] = getattr(orchestrator, "brief_path", None)
         current_session["last_final_draft"] = getattr(
             orchestrator, "final_draft_path", None
+        )
+        current_session["last_pipeline_dir"] = getattr(
+            orchestrator, "pipeline_dir", None
         )
     except Exception as exc:
         emit_event(SessionEvent.ERROR, {"message": str(exc)})
@@ -284,11 +331,15 @@ def continue_session_thread(orchestrator: SessionOrchestrator, additional_rounds
         current_session["last_transcript"] = None
         current_session["last_brief"] = None
         current_session["last_final_draft"] = None
+        current_session["last_pipeline_dir"] = None
         orchestrator.resume(additional_rounds)
         current_session["last_transcript"] = orchestrator.transcript_path
         current_session["last_brief"] = getattr(orchestrator, "brief_path", None)
         current_session["last_final_draft"] = getattr(
             orchestrator, "final_draft_path", None
+        )
+        current_session["last_pipeline_dir"] = getattr(
+            orchestrator, "pipeline_dir", None
         )
     except Exception as exc:
         emit_event(SessionEvent.ERROR, {"message": str(exc)})
@@ -347,6 +398,7 @@ async def get_status():
         "last_transcript": current_session.get("last_transcript"),
         "last_brief": current_session.get("last_brief"),
         "last_final_draft": current_session.get("last_final_draft"),
+        "last_pipeline_dir": current_session.get("last_pipeline_dir"),
     }
 
 
@@ -382,6 +434,40 @@ async def get_latest_final_draft():
         return JSONResponse({"error": "The latest final draft could not be found on disk."}, status_code=404)
 
     return FileResponse(str(md_path), media_type="text/markdown")
+
+
+@app.get("/transcripts/latest", response_class=FileResponse)
+async def get_latest_transcript():
+    """Return the most recent saved transcript file."""
+    transcript_path = current_session.get("last_transcript")
+    if not transcript_path:
+        return JSONResponse({"error": "No transcript has been saved yet."}, status_code=404)
+
+    txt_path = Path(transcript_path)
+    if not _is_allowed_transcript_path(txt_path):
+        return JSONResponse({"error": "Invalid transcript path."}, status_code=403)
+
+    if not txt_path.exists():
+        return JSONResponse({"error": "The latest transcript could not be found on disk."}, status_code=404)
+
+    return FileResponse(str(txt_path), media_type="text/plain")
+
+
+@app.get("/pipelines/latest", response_class=FileResponse)
+async def get_latest_pipeline_index():
+    """Return the ``index.md`` of the most recent pipeline directory."""
+    pipeline_dir = current_session.get("last_pipeline_dir")
+    if not pipeline_dir:
+        return JSONResponse({"error": "No pipeline has been generated yet."}, status_code=404)
+
+    index_path = _resolve_pipeline_index(pipeline_dir)
+    if index_path is None:
+        return JSONResponse(
+            {"error": "Pipeline index is missing or outside the allowed directory."},
+            status_code=404,
+        )
+
+    return FileResponse(str(index_path), media_type="text/markdown")
 
 
 @app.get("/api/modes")

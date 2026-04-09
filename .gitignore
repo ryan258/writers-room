@@ -7,6 +7,8 @@ __pycache__/
 
 # Transcripts (optional - uncomment if you don't want to commit them)
 transcripts/
+final/
+pipelines/
 
 # IDE
 .vscode/

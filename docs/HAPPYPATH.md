@@ -115,20 +115,28 @@ declares an action in character, and the Producer is disabled by design
 
 When all rounds complete:
 
-- The full transcript is written to `transcripts/session_<timestamp>.txt`
-- A rendered HTML brief is written next to it and surfaced at
-  `/briefs/latest`
+- The full transcript is written to `transcripts/{YYMMDD}_{title-name}_transcript.txt`
+- A rendered HTML brief is written to
+  `transcripts/{YYMMDD}_{title-name}_brief.html` and surfaced at `/briefs/latest`
 - If you enabled **Produce final draft** before launching (non-D&D only),
   a synthesized short story is written to
-  `transcripts/web_session_<timestamp>_final.md` and served at
-  `/drafts/latest`. The same story is also embedded as the headline
-  section of the HTML brief.
+  `final/{YYMMDD}_{title-name}_final.md` and served at `/drafts/latest`.
+  The same story is also embedded as the headline section of the HTML brief.
+- When a final draft exists, the full pipeline is written to a directory
+  at `pipelines/{YYMMDD}_{title-name}/` containing:
+  - `status.md` (editing steps + polish checklist)
+  - `marketing/logline.md`, `back-cover.md`, `character-sheet.md`,
+    `pull-quotes.md`, `cover-brief.md`, `social-teasers.md`,
+    `newsletter.md`, `landing-page.md`
+  - `index.md` (links + any `PENDING` items)
+  - `.failures.json` (only when at least one item failed; removed when
+    `--retry-pipeline` resolves everything)
 - The session orchestrator stays in memory so you can call
   `/api/continue` to extend it for more rounds without losing the Story
   State
 
 In the UI, click **View Brief** to see the formatted recap, or open the
-`transcripts/` directory directly.
+`transcripts/`, `final/`, and `pipelines/` directories directly.
 
 ## 9. (Optional) Continue the session
 
@@ -169,6 +177,19 @@ colorized output. Useful flags (see `main.py:492`):
 | `--skip-validation` | off | Skip the API key check (faster startup) |
 
 Transcripts land in the same `transcripts/` directory as the web flow.
+If you edit a saved final draft from a web run, regenerate its pipeline
+directory with:
+
+```bash
+# Full regenerate — status + all eight marketing assets
+uv run python main.py --run-pipeline final/260409_the-closet_final.md
+
+# Or, if a previous run left items in .failures.json, retry just those
+uv run python main.py --retry-pipeline final/260409_the-closet_final.md
+```
+
+Both commands exit with a non-zero status if any item is still pending in
+`.failures.json`, which is what QA should key off when validating retries.
 
 ---
 
@@ -206,6 +227,10 @@ The happy path deliberately avoids:
 - **Final draft synthesis on by default** — `produce_final_draft` is opt-in
   and costs an extra two Editor passes after the last round. The happy
   path leaves it off until you've seen a normal session land cleanly.
+- **CLI final-draft generation** — the CLI can regenerate (or retry) a
+  pipeline directory from an edited draft via `--run-pipeline` /
+  `--retry-pipeline`, but the automatic final-draft-plus-pipeline flow
+  at session completion currently lives in the web session path.
 - **Multi-tenant use** — the server holds one live session in process
   global state. Don't expose it to more than one concurrent user.
 - **Resuming over a server restart** — sessions are in-memory; restarting

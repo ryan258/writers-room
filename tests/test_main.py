@@ -1,4 +1,7 @@
+import argparse
 from urllib import error as urllib_error
+
+import pytest
 
 import main as main_module
 from lib import custom_agents as custom_agents_module
@@ -169,15 +172,144 @@ def test_save_transcript_uses_round_grouping_for_dnd(tmp_path):
 def test_main_create_agent_mode_imports_lib_custom_agents(monkeypatch):
     called = {}
 
-    class Args:
-        create_agent = True
-
     def fake_interactive_create_agent():
         called["interactive"] = True
 
-    monkeypatch.setattr(main_module, "parse_args", lambda: Args())
+    monkeypatch.setattr(
+        main_module,
+        "parse_args",
+        lambda: argparse.Namespace(create_agent=True),
+    )
     monkeypatch.setattr(custom_agents_module, "interactive_create_agent", fake_interactive_create_agent)
 
     main_module.main()
 
     assert called["interactive"] is True
+
+
+def test_main_run_pipeline_mode_uses_saved_final_draft(monkeypatch):
+    called = {}
+
+    def fake_generate_pipeline_report_from_draft(**kwargs):
+        called["kwargs"] = kwargs
+        return "pipelines/the-closet"
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-test-token")
+    monkeypatch.setattr(
+        main_module,
+        "parse_args",
+        lambda: argparse.Namespace(
+            create_agent=False,
+            run_pipeline="final/260409_the-closet_final.md",
+            retry_pipeline=None,
+            skip_validation=True,
+            model="demo-model",
+        ),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "generate_pipeline_report_from_draft",
+        fake_generate_pipeline_report_from_draft,
+    )
+
+    main_module.main()
+
+    assert called["kwargs"]["draft_path"] == "final/260409_the-closet_final.md"
+    assert called["kwargs"]["model"] == "demo-model"
+
+
+def test_main_retry_pipeline_mode_delegates_to_retry_helper(monkeypatch):
+    called = {}
+
+    def fake_retry_failed_pipeline_items(**kwargs):
+        called["kwargs"] = kwargs
+        return "pipelines/the-closet"
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-test-token")
+    monkeypatch.setattr(
+        main_module,
+        "parse_args",
+        lambda: argparse.Namespace(
+            create_agent=False,
+            run_pipeline=None,
+            retry_pipeline="final/260409_the-closet_final.md",
+            skip_validation=True,
+            model="demo-model",
+        ),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "retry_failed_pipeline_items",
+        fake_retry_failed_pipeline_items,
+    )
+
+    main_module.main()
+
+    assert called["kwargs"]["draft_path"] == "final/260409_the-closet_final.md"
+    assert called["kwargs"]["model"] == "demo-model"
+
+
+def test_main_run_pipeline_mode_exits_nonzero_when_pipeline_has_failures(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-test-token")
+    monkeypatch.setattr(
+        main_module,
+        "parse_args",
+        lambda: argparse.Namespace(
+            create_agent=False,
+            run_pipeline="final/260409_the-closet_final.md",
+            retry_pipeline=None,
+            skip_validation=True,
+            model="demo-model",
+        ),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "generate_pipeline_report_from_draft",
+        lambda **kwargs: "pipelines/260409_the-closet",
+    )
+    monkeypatch.setattr(
+        main_module,
+        "get_pipeline_failures",
+        lambda pipeline_dir: {
+            "status_failed": False,
+            "marketing_failed": ["landing-page"],
+        },
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main_module.main()
+
+    assert excinfo.value.code == 1
+
+
+def test_main_retry_pipeline_mode_exits_nonzero_when_pipeline_has_failures(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-test-token")
+    monkeypatch.setattr(
+        main_module,
+        "parse_args",
+        lambda: argparse.Namespace(
+            create_agent=False,
+            run_pipeline=None,
+            retry_pipeline="final/260409_the-closet_final.md",
+            skip_validation=True,
+            model="demo-model",
+        ),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "retry_failed_pipeline_items",
+        lambda **kwargs: "pipelines/260409_the-closet",
+    )
+    monkeypatch.setattr(
+        main_module,
+        "get_pipeline_failures",
+        lambda pipeline_dir: {
+            "status_failed": True,
+            "marketing_failed": [],
+        },
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main_module.main()
+
+    assert excinfo.value.code == 1

@@ -36,6 +36,12 @@ except ImportError:  # pragma: no cover - exercised in thin local installs
     Style = _ColorFallback()
 
 from lib.agents import Agent
+from lib.artifacts import build_artifact_paths
+from lib.pipeline import (
+    generate_pipeline_report_from_draft,
+    get_pipeline_failures,
+    retry_failed_pipeline_items,
+)
 from lib.story_state import StoryStateManager
 from lib.personalities import (
     PRODUCER,
@@ -90,7 +96,13 @@ def print_agent_response(agent_name: str, response: str, color: str):
     print(f"{color}+{'-'*58}\n")
 
 
-def save_transcript(prompt: str, conversation_history: list, story_state=None, filename: str = None):
+def save_transcript(
+    prompt: str,
+    conversation_history: list,
+    *,
+    filename: str,
+    story_state=None,
+) -> str:
     """
     Save the conversation to a transcript file.
 
@@ -98,12 +110,8 @@ def save_transcript(prompt: str, conversation_history: list, story_state=None, f
         prompt: The initial prompt
         conversation_history: List of all messages
         story_state: Optional StoryState object for metadata
-        filename: Optional custom filename
+        filename: Required output path
     """
-    if filename is None:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"transcripts/session_{timestamp}.txt"
-
     # Ensure directory exists
     os.makedirs(os.path.dirname(filename), exist_ok=True)
 
@@ -148,6 +156,25 @@ def save_transcript(prompt: str, conversation_history: list, story_state=None, f
 
     print(f"{Fore.CYAN}Transcript saved to: {filename}")
     return filename
+
+
+def _handle_pipeline_cli_result(pipeline_dir: str, *, action_label: str) -> None:
+    """Print a CLI summary and exit non-zero if the pipeline still has failures."""
+    failures = get_pipeline_failures(pipeline_dir)
+    if not failures:
+        print(f"{Fore.CYAN}{action_label} written to: {pipeline_dir}")
+        return
+
+    print(f"{Fore.YELLOW}{action_label} completed with failures in: {pipeline_dir}")
+    if failures["status_failed"]:
+        print(f"{Fore.YELLOW}- status.md is still pending")
+    if failures["marketing_failed"]:
+        failed_items = ", ".join(failures["marketing_failed"])
+        print(f"{Fore.YELLOW}- marketing assets still pending: {failed_items}")
+    print(
+        f"{Fore.YELLOW}See {os.path.join(pipeline_dir, '.failures.json')} for the retry manifest."
+    )
+    sys.exit(1)
 
 
 def validate_api_key():
@@ -545,6 +572,27 @@ def parse_args():
         action="store_true",
         help="Interactive mode to create a custom agent"
     )
+    parser.add_argument(
+        "--run-pipeline",
+        type=str,
+        default=None,
+        metavar="DRAFT_PATH",
+        help=(
+            "Regenerate the full pipelines/{YYMMDD}_{title-name}/ directory "
+            "(status + all marketing assets) from an edited final draft"
+        ),
+    )
+    parser.add_argument(
+        "--retry-pipeline",
+        type=str,
+        default=None,
+        metavar="DRAFT_PATH",
+        help=(
+            "Retry only the items recorded in "
+            "pipelines/{YYMMDD}_{title-name}/.failures.json "
+            "(no-op if the manifest is missing or empty)"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -580,6 +628,28 @@ def main():
             print(f"{Fore.RED}ERROR: OPENROUTER_API_KEY not found in environment.")
             print(f"{Fore.YELLOW}Please create a .env file with your OpenRouter API key.")
             sys.exit(1)
+
+    if args.run_pipeline:
+        pipeline_dir = generate_pipeline_report_from_draft(
+            draft_path=args.run_pipeline,
+            model=args.model or DEFAULT_MODEL,
+        )
+        _handle_pipeline_cli_result(
+            pipeline_dir,
+            action_label="Pipeline directory",
+        )
+        return
+
+    if args.retry_pipeline:
+        pipeline_dir = retry_failed_pipeline_items(
+            draft_path=args.retry_pipeline,
+            model=args.model or DEFAULT_MODEL,
+        )
+        _handle_pipeline_cli_result(
+            pipeline_dir,
+            action_label="Pipeline retry",
+        )
+        return
 
     # Select story mode
     if args.mode:
@@ -776,10 +846,12 @@ def main():
                 print(f"{Fore.RED}{'='*60}\n")
 
     # Save transcript with story state
+    artifact_paths = build_artifact_paths(title=user_prompt)
     transcript_path = save_transcript(
         user_prompt,
         conversation_history,
         story_state=story_manager.state,
+        filename=str(artifact_paths.transcript_path),
     )
 
     final_averages = []
@@ -803,6 +875,7 @@ def main():
         conversation_history=conversation_history,
         leaderboard=leaderboard,
         transcript_path=transcript_path,
+        output_path=artifact_paths.brief_path,
     )
     if brief_path:
         print(f"{Fore.CYAN}Session brief saved to: {brief_path}")

@@ -595,6 +595,84 @@ function showFired(worst) {
   banner.classList.remove("hidden");
 }
 
+const ARTIFACT_LINK_SPECS = [
+  {
+    key: "finalDraftPath",
+    href: "/drafts/latest",
+    label: "Final draft",
+    hint: "markdown",
+  },
+  {
+    key: "pipelineDir",
+    href: "/pipelines/latest",
+    label: "Pipeline index",
+    hint: "markdown",
+  },
+  {
+    key: "briefPath",
+    href: "/briefs/latest",
+    label: "Session brief",
+    hint: "html",
+  },
+  {
+    key: "transcriptPath",
+    href: "/transcripts/latest",
+    label: "Transcript",
+    hint: "text",
+  },
+];
+
+function updateArtifactLinks(state) {
+  const panel = document.getElementById("artifact-links");
+  const list = document.getElementById("artifact-links-list");
+  if (!panel || !list) {
+    return;
+  }
+
+  list.textContent = "";
+  const entries = ARTIFACT_LINK_SPECS.filter((spec) => Boolean(state[spec.key]));
+
+  if (entries.length === 0) {
+    panel.classList.add("hidden");
+    return;
+  }
+
+  entries.forEach((spec) => {
+    const li = document.createElement("li");
+    const link = document.createElement("a");
+    link.href = spec.href;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.title = state[spec.key];
+
+    const label = document.createElement("span");
+    label.className = "artifact-links__label";
+    label.textContent = spec.label;
+    link.appendChild(label);
+
+    const hint = document.createElement("span");
+    hint.className = "artifact-links__hint";
+    hint.textContent = spec.hint;
+    link.appendChild(hint);
+
+    li.appendChild(link);
+    list.appendChild(li);
+  });
+
+  panel.classList.remove("hidden");
+}
+
+function clearArtifactLinks() {
+  const panel = document.getElementById("artifact-links");
+  const list = document.getElementById("artifact-links-list");
+  if (list) {
+    list.textContent = "";
+  }
+  if (panel) {
+    panel.classList.add("hidden");
+  }
+}
+
 function queueAudio(audioPayload) {
   if (!audioPayload) {
     return;
@@ -653,6 +731,7 @@ function clearPreviousSession() {
   document.getElementById("winner-banner").classList.add("hidden");
   document.getElementById("fired-banner").classList.add("hidden");
   document.getElementById("story-state-panel").classList.add("hidden");
+  clearArtifactLinks();
 }
 
 function handleEvent(eventName, data) {
@@ -862,7 +941,9 @@ function handleEvent(eventName, data) {
           briefPath: data.brief_path,
           finalDraftPath: data.final_draft_path,
           transcriptPath: data.transcript_path,
+          pipelineDir: data.pipeline_dir,
         };
+        updateArtifactLinks(artifactState);
         const links = buildArtifactLinks(artifactState);
         if (links.length || data.transcript_path) {
           showSessionNote(artifactNoteMessage(artifactState), links);
@@ -927,7 +1008,9 @@ async function rehydrateSessionState() {
         briefPath: status.last_brief,
         finalDraftPath: status.last_final_draft,
         transcriptPath: status.last_transcript,
+        pipelineDir: status.last_pipeline_dir,
       };
+      updateArtifactLinks(artifactState);
       const links = buildArtifactLinks(artifactState);
       if (links.length || status.last_transcript) {
         showSessionNote(artifactNoteMessage(artifactState), links);

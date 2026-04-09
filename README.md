@@ -18,6 +18,7 @@ The repo now also supports a `dnd` mode that turns the table into a level 9 D&D 
 - Web UI in [`web/app.py`](/Users/ryanjohnson/Projects/writers-room/web/app.py) on port `5001`
 - Shared Center Table story-state engine in [`lib/story_state.py`](/Users/ryanjohnson/Projects/writers-room/lib/story_state.py)
 - Session orchestration in [`lib/session.py`](/Users/ryanjohnson/Projects/writers-room/lib/session.py)
+- Final-draft pipeline generation in [`lib/pipeline.py`](/Users/ryanjohnson/Projects/writers-room/lib/pipeline.py)
 - Custom agent CRUD in [`lib/custom_agents.py`](/Users/ryanjohnson/Projects/writers-room/lib/custom_agents.py) and [`web/templates/agents.html`](/Users/ryanjohnson/Projects/writers-room/web/templates/agents.html)
 - Automatic transcript saving for both CLI and web sessions into `transcripts/`
 - Pytest suite covering agents, session orchestration, story state, custom agents, and the web API
@@ -81,6 +82,45 @@ uv run uvicorn web.app:app --reload --port 5001
 Open [http://localhost:5001](http://localhost:5001).
 
 When a web session finishes, the server stores both the plain transcript and an HTML brief. The latest brief is available at [http://localhost:5001/briefs/latest](http://localhost:5001/briefs/latest).
+
+If you enable the final-draft pass for a web session, Writers Room now saves:
+
+- `transcripts/{YYMMDD}_{title-name}_transcript.txt`
+- `transcripts/{YYMMDD}_{title-name}_brief.html`
+- `final/{YYMMDD}_{title-name}_final.md`
+- `pipelines/{YYMMDD}_{title-name}/` — a directory of per-asset files:
+  - `status.md` — editing steps + polish checklist (one structured JSON call)
+  - `marketing/logline.md`
+  - `marketing/back-cover.md`
+  - `marketing/character-sheet.md`
+  - `marketing/pull-quotes.md`
+  - `marketing/cover-brief.md`
+  - `marketing/social-teasers.md`
+  - `marketing/newsletter.md`
+  - `marketing/landing-page.md`
+  - `index.md` — links to every artifact, marks anything that failed as `PENDING`
+  - `.failures.json` — written only when one or more items failed; used by
+    `--retry-pipeline` and removed automatically once every item succeeds
+
+Each marketing asset is generated with its own model call so long-form copy
+(back-cover blurb, landing page) gets the full token budget instead of
+competing with short-form items. Marketing calls run in parallel batches of two
+to stay under provider rate limits.
+
+Web sessions generate the pipeline directory automatically. The CLI supports
+two entry points into the same pipeline module:
+
+```bash
+# Full regenerate: status + all eight marketing assets
+uv run python main.py --run-pipeline final/260409_the-closet_final.md
+
+# Retry only the items recorded in pipelines/{YYMMDD}_{title-name}/.failures.json
+uv run python main.py --retry-pipeline final/260409_the-closet_final.md
+```
+
+`--retry-pipeline` is a no-op when the manifest is missing or empty.
+Both pipeline commands exit non-zero when any item remains pending in
+`.failures.json`.
 
 ## Tests
 

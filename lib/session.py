@@ -9,6 +9,7 @@ from typing import Dict, Any, List, Optional, Callable
 
 from .story_state import StoryStateManager
 from .agents import Agent
+from .artifacts import build_artifact_paths, extract_markdown_title
 from .custom_agents import CustomAgentManager
 from .personalities import (
     PRODUCER,
@@ -20,6 +21,7 @@ from .personalities import (
     is_dnd_mode,
 )
 from .final_draft import generate_final_draft
+from .pipeline import generate_pipeline_report_from_draft
 from .session_briefing import render_session_brief
 from .session_turns import build_dnd_story_context, generate_dnd_turn, generate_story_turn
 
@@ -132,6 +134,7 @@ class SessionOrchestrator:
         self.brief_path = None
         self.final_draft_path = None
         self.final_draft_markdown = None
+        self.pipeline_dir = None
 
     def initialize(self, prompt: str, config: Dict[str, Any]):
         self.config = config
@@ -142,6 +145,7 @@ class SessionOrchestrator:
         self.brief_path = None
         self.final_draft_path = None
         self.final_draft_markdown = None
+        self.pipeline_dir = None
         story_mode = config.get('mode', 'horror')
         if is_dnd_mode(story_mode):
             self.config['include_custom_agents'] = False
@@ -272,23 +276,7 @@ class SessionOrchestrator:
             traceback.print_exc()
         finally:
              self.active = False
-             try:
-                 self.transcript_path = self.save_transcript()
-             except Exception as exc:
-                 self.emit(SessionEvent.ERROR, {'message': f"Transcript save failed: {exc}"})
-             self._maybe_generate_final_draft()
-             try:
-                 self.brief_path = render_session_brief(
-                     prompt=self.config.get('prompt', ''),
-                     mode=self.config.get('mode', 'horror'),
-                     story_state=self.story_manager.get_state() if self.story_manager else None,
-                     conversation_history=self.conversation_history,
-                     leaderboard=self._calculate_leaderboard(),
-                     transcript_path=self.transcript_path,
-                     final_draft_markdown=self.final_draft_markdown,
-                 )
-             except Exception:
-                 self.brief_path = None
+             self._persist_session_artifacts()
              self.emit(SessionEvent.SESSION_COMPLETED, self._get_session_summary())
 
     def _completed_rounds(self) -> int:
@@ -307,6 +295,7 @@ class SessionOrchestrator:
         self.brief_path = None
         self.final_draft_path = None
         self.final_draft_markdown = None
+        self.pipeline_dir = None
 
         self.emit(SessionEvent.SESSION_RESUMED, {
             'additional_rounds': additional_rounds,
@@ -327,23 +316,7 @@ class SessionOrchestrator:
             traceback.print_exc()
         finally:
             self.active = False
-            try:
-                self.transcript_path = self.save_transcript()
-            except Exception as exc:
-                self.emit(SessionEvent.ERROR, {'message': f"Transcript save failed: {exc}"})
-            self._maybe_generate_final_draft()
-            try:
-                self.brief_path = render_session_brief(
-                    prompt=self.config.get('prompt', ''),
-                    mode=self.config.get('mode', 'horror'),
-                    story_state=self.story_manager.get_state() if self.story_manager else None,
-                    conversation_history=self.conversation_history,
-                    leaderboard=self._calculate_leaderboard(),
-                    transcript_path=self.transcript_path,
-                    final_draft_markdown=self.final_draft_markdown,
-                )
-            except Exception:
-                self.brief_path = None
+            self._persist_session_artifacts()
             self.emit(SessionEvent.SESSION_COMPLETED, self._get_session_summary())
 
     def _build_story_state_payload(self, state=None):
@@ -546,19 +519,84 @@ class SessionOrchestrator:
          ]
 
     def _finalize_session(self):
-         # Logic for final cleanup or stats is handled in get_session_summary for the event
-         pass
+         # Generate the optional final draft before the artifact persistence step
+         # in ``finally`` so transcript/brief saving is not responsible for
+         # triggering long-running editor work.
+         self.final_draft_markdown = self._maybe_generate_final_draft()
 
-    def save_transcript(self) -> Optional[str]:
+    def _persist_session_artifacts(self) -> None:
+        """Generate and persist transcript, brief, final draft, and pipeline."""
+        self.transcript_path = None
+        self.brief_path = None
+        self.final_draft_path = None
+        self.pipeline_dir = None
+
+        title = (
+            extract_markdown_title(self.final_draft_markdown or "")
+            or self.config.get("prompt")
+            or "untitled-session"
+        )
+        artifact_paths = build_artifact_paths(
+            title=title,
+            transcript_dir=self.config.get("transcript_dir", "transcripts"),
+            final_dir=self.config.get("final_dir", "final"),
+            pipeline_dir=self.config.get("pipeline_dir", "pipelines"),
+        )
+
+        try:
+            self.transcript_path = self.save_transcript(artifact_paths.transcript_path)
+        except Exception as exc:
+            self.emit(SessionEvent.ERROR, {'message': f"Transcript save failed: {exc}"})
+
+        if self.final_draft_markdown:
+            try:
+                self.final_draft_path = self._save_final_draft_markdown(
+                    artifact_paths.final_draft_path,
+                    self.final_draft_markdown,
+                )
+            except Exception as exc:
+                self.emit(
+                    SessionEvent.ERROR,
+                    {'message': f"Final draft save failed: {exc}"},
+                )
+                self.final_draft_path = None
+
+        try:
+            self.brief_path = render_session_brief(
+                prompt=self.config.get('prompt', ''),
+                mode=self.config.get('mode', 'horror'),
+                story_state=self.story_manager.get_state() if self.story_manager else None,
+                conversation_history=self.conversation_history,
+                leaderboard=self._calculate_leaderboard(),
+                transcript_path=self.transcript_path,
+                output_path=artifact_paths.brief_path,
+                final_draft_markdown=self.final_draft_markdown,
+            )
+        except Exception as exc:
+            self.emit(SessionEvent.ERROR, {'message': f"Brief render failed: {exc}"})
+            self.brief_path = None
+
+        if self.final_draft_path:
+            try:
+                self.pipeline_dir = generate_pipeline_report_from_draft(
+                    draft_path=self.final_draft_path,
+                    model=self.config.get("model") or DEFAULT_MODEL,
+                    output_dir=artifact_paths.pipeline_dir,
+                )
+            except Exception as exc:
+                self.emit(
+                    SessionEvent.ERROR,
+                    {'message': f"Pipeline generation failed: {exc}"},
+                )
+                self.pipeline_dir = None
+
+    def save_transcript(self, output_path: str | Path) -> Optional[str]:
         """Persist the web session transcript and return the file path."""
         if not self.conversation_history:
             return None
 
-        transcript_dir = Path(self.config.get("transcript_dir", "transcripts"))
-        transcript_dir.mkdir(parents=True, exist_ok=True)
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        transcript_path = transcript_dir / f"web_session_{timestamp}.txt"
+        transcript_path = Path(output_path)
+        transcript_path.parent.mkdir(parents=True, exist_ok=True)
         prompt = self.config.get("prompt") or self.conversation_history[0]["content"]
 
         with transcript_path.open("w", encoding="utf-8") as handle:
@@ -614,17 +652,17 @@ class SessionOrchestrator:
 
         return str(transcript_path)
 
-    def _maybe_generate_final_draft(self) -> None:
+    def _maybe_generate_final_draft(self) -> Optional[str]:
         """Run the two-pass Editor if the toggle is on and mode allows it."""
         if not self.config.get('produce_final_draft'):
-            return
+            return None
         if is_dnd_mode(self.config.get('mode', 'horror')):
-            return
+            return None
         if not self.conversation_history:
-            return
+            return None
 
         try:
-            markdown = generate_final_draft(
+            return generate_final_draft(
                 config=self.config,
                 conversation_history=self.conversation_history,
                 story_state=self.story_manager.get_state() if self.story_manager else None,
@@ -632,28 +670,12 @@ class SessionOrchestrator:
             )
         except Exception as exc:
             self.emit(SessionEvent.ERROR, {'message': f"Final draft failed: {exc}"})
-            self.final_draft_markdown = None
-            self.final_draft_path = None
-            return
-
-        self.final_draft_markdown = markdown
-        if markdown and self.transcript_path:
-            try:
-                self.final_draft_path = self._save_final_draft_markdown(
-                    self.transcript_path, markdown
-                )
-            except Exception as exc:
-                self.emit(
-                    SessionEvent.ERROR,
-                    {'message': f"Final draft save failed: {exc}"},
-                )
-                self.final_draft_path = None
+            return None
 
     @staticmethod
-    def _save_final_draft_markdown(transcript_path: str, markdown: str) -> str:
-        """Persist the final draft alongside the transcript as ``*_final.md``."""
-        transcript = Path(transcript_path)
-        target = transcript.with_name(f"{transcript.stem}_final.md")
+    def _save_final_draft_markdown(output_path: str | Path, markdown: str) -> str:
+        """Persist the final draft to its canonical location."""
+        target = Path(output_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(markdown, encoding="utf-8")
         return str(target)
@@ -672,4 +694,5 @@ class SessionOrchestrator:
             'transcript_path': self.transcript_path,
             'brief_path': getattr(self, 'brief_path', None),
             'final_draft_path': getattr(self, 'final_draft_path', None),
+            'pipeline_dir': getattr(self, 'pipeline_dir', None),
         }
