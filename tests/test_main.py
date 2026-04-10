@@ -6,7 +6,6 @@ import pytest
 import main as main_module
 from lib import custom_agents as custom_agents_module
 from lib.personalities import DEFAULT_MODEL, get_agent_roster
-from lib.story_state import StoryStateManager
 from lib.session_turns import (
     build_clean_dnd_history,
     clean_dnd_table_talk,
@@ -78,9 +77,16 @@ def test_dnd_roster_prompts_do_not_append_generic_mode_context():
 
 
 def test_display_story_state_hides_story_needs_for_dnd(capsys):
-    manager = StoryStateManager("A cursed bell tolls under the abbey.", mode="dnd")
-
-    main_module.display_story_state(manager)
+    main_module.display_story_state(
+        {
+            "mode": "dnd",
+            "current_act": 1,
+            "tension_level": 4,
+            "open_threads": 0,
+            "word_count": 12,
+            "story_needs": ["Ignore me"],
+        }
+    )
 
     output = capsys.readouterr().out
     assert "Open Threads" in output
@@ -130,43 +136,244 @@ def test_build_clean_dnd_history_filters_meta_turns():
     assert cleaned[1]["content"].startswith("The study door trembles on its hinges")
 
 
-def test_save_transcript_uses_round_grouping_for_dnd(tmp_path):
-    filename = tmp_path / "dnd_transcript.txt"
-    manager = StoryStateManager("The manor has begun to breathe.", mode="dnd")
-    manager.process_contribution(
-        "The hall falls silent as the portrait eyes turn toward you.",
-        "Dungeon Master",
-        1,
-    )
+class DummySessionOrchestrator:
+    def __init__(self, event_callback):
+        self.event_callback = event_callback
+        self.initialize_calls = []
+        self.run_calls = []
+        self.resume_calls = []
+        self.config = {}
+        DummySessionOrchestrator.instance = self
 
-    saved_path = main_module.save_transcript(
-        "The manor has begun to breathe.",
+    def initialize(self, prompt, config):
+        self.initialize_calls.append((prompt, config))
+        self.config = config
+        self.event_callback(
+            main_module.SessionEvent.SESSION_STARTED,
+            {
+                "prompt": prompt,
+                "rounds": config["rounds"],
+                "config": config,
+                "mode": config["mode"],
+                "agent_roster": [
+                    {
+                        "name": "Rod Serling",
+                        "color": "#00FFFF",
+                        "specialty": "dread",
+                    }
+                ],
+            },
+        )
+
+    def run_session(self, rounds):
+        self.run_calls.append(rounds)
+        self._emit_round(round_num=1, total=rounds)
+        self._emit_completion()
+
+    def resume(self, additional_rounds):
+        self.resume_calls.append(additional_rounds)
+        self.event_callback(
+            main_module.SessionEvent.SESSION_RESUMED,
+            {
+                "additional_rounds": additional_rounds,
+                "starting_round": len(self.run_calls) + sum(self.resume_calls[:-1]) + 1,
+                "config": self.config,
+                "agent_roster": [
+                    {
+                        "name": "Rod Serling",
+                        "color": "#00FFFF",
+                        "specialty": "dread",
+                    }
+                ],
+            },
+        )
+        self._emit_round(round_num=2, total=1 + additional_rounds)
+        self._emit_completion()
+
+    def _emit_round(self, *, round_num, total):
+        mode = self.config["mode"]
+        self.event_callback(
+            main_module.SessionEvent.STORY_STATE_UPDATE,
+            {
+                "round": round_num,
+                "state": {
+                    "mode": mode,
+                    "current_act": 1,
+                    "tension_level": 4,
+                    "themes": [],
+                    "open_threads": 0,
+                    "word_count": 42,
+                    "story_needs": [] if mode == "dnd" else ["Establish a central conflict or mystery"],
+                },
+            },
+        )
+        self.event_callback(
+            main_module.SessionEvent.ROUND_STARTED,
+            {"round": round_num, "total": total},
+        )
+        self.event_callback(
+            main_module.SessionEvent.AGENT_RESPONSE,
+            {
+                "agent": "Rod Serling",
+                "response": "A door sighed open.",
+                "color": "#00FFFF",
+                "round": round_num,
+            },
+        )
+        if self.config.get("producer_enabled"):
+            self.event_callback(
+                main_module.SessionEvent.PRODUCER_VERDICT,
+                {
+                    "response": "Solid round.\n\nRod Serling: 8/10",
+                    "scores": {"Rod Serling": 8},
+                    "leaderboard": [
+                        {
+                            "name": "Rod Serling",
+                            "average": 8.0,
+                            "scores": [8],
+                        }
+                    ],
+                    "round": round_num,
+                },
+            )
+
+    def _emit_completion(self):
+        leaderboard = []
+        winner = None
+        if self.config.get("producer_enabled"):
+            leaderboard = [
+                {
+                    "name": "Rod Serling",
+                    "average": 8.0,
+                    "scores": [8],
+                }
+            ]
+            winner = leaderboard[0]
+
+        self.event_callback(
+            main_module.SessionEvent.SESSION_COMPLETED,
+            {
+                "leaderboard": leaderboard,
+                "winner": winner,
+                "worst": None,
+                "story_state": None,
+                "transcript_path": "transcripts/demo_transcript.txt",
+                "brief_path": "transcripts/demo_brief.html",
+                "final_draft_path": None,
+                "pipeline_dir": None,
+            },
+        )
+
+
+def test_main_horror_mode_uses_orchestrator_sink(monkeypatch, capsys):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-test-token")
+    monkeypatch.setattr(main_module, "SessionOrchestrator", DummySessionOrchestrator)
+    monkeypatch.setattr(
+        main_module,
+        "parse_args",
+        lambda: argparse.Namespace(
+            create_agent=False,
+            run_pipeline=None,
+            retry_pipeline=None,
+            skip_validation=True,
+            model="demo-model",
+            mode="horror",
+            rounds=1,
+            no_continue=True,
+            temperature=None,
+            no_producer=False,
+            fire_worst=False,
+        ),
+    )
+    prompts = iter(["A storm cellar opens beneath the farmhouse."])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(prompts))
+
+    main_module.main()
+
+    output = capsys.readouterr().out
+    orchestrator = DummySessionOrchestrator.instance
+    assert orchestrator.run_calls == [1]
+    assert orchestrator.initialize_calls[0][0] == "A storm cellar opens beneath the farmhouse."
+    assert orchestrator.config["include_custom_agents"] is False
+    assert orchestrator.config["producer_enabled"] is True
+    assert "Rod Serling (dread)" in output
+    assert "THE PRODUCER'S VERDICT" in output
+    assert "FINAL LEADERBOARD" in output
+    assert "WINNER: Rod Serling" in output
+    assert "Transcript saved to: transcripts/demo_transcript.txt" in output
+
+
+def test_main_resume_uses_orchestrator_resume(monkeypatch, capsys):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-test-token")
+    monkeypatch.setattr(main_module, "SessionOrchestrator", DummySessionOrchestrator)
+    monkeypatch.setattr(
+        main_module,
+        "parse_args",
+        lambda: argparse.Namespace(
+            create_agent=False,
+            run_pipeline=None,
+            retry_pipeline=None,
+            skip_validation=True,
+            model="demo-model",
+            mode="horror",
+            rounds=1,
+            no_continue=False,
+            temperature=None,
+            no_producer=False,
+            fire_worst=False,
+        ),
+    )
+    prompts = iter(
         [
-            {"role": "user", "content": "ignored for dnd transcript"},
-            {
-                "role": "assistant",
-                "name": "Dungeon Master",
-                "content": "The hall falls silent as the portrait eyes turn toward you.",
-                "round": 1,
-            },
-            {
-                "role": "assistant",
-                "name": "Rod Serling",
-                "content": "Cassian lifts his lantern and asks who in this house still has a pulse.",
-                "round": 1,
-            },
-        ],
-        story_state=manager.state,
-        filename=str(filename),
+            "The ferry returns with no passengers.",
+            "2",
+            "n",
+        ]
     )
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(prompts))
 
-    text = filename.read_text(encoding="utf-8")
+    main_module.main()
 
-    assert saved_path == str(filename)
-    assert "WRITERS ROOM D&D TABLE TRANSCRIPT" in text
-    assert "ADVENTURE HOOK: The manor has begun to breathe." in text
-    assert "ROUND 1" in text
-    assert "[USER]" not in text
+    output = capsys.readouterr().out
+    orchestrator = DummySessionOrchestrator.instance
+    assert orchestrator.run_calls == [1]
+    assert orchestrator.resume_calls == [2]
+    assert "Continuing with 2 more round(s)" in output
+    assert "ROUNDS COMPLETE (Total: 3)" in output
+
+
+def test_main_dnd_mode_disables_producer_and_story_needs(monkeypatch, capsys):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-test-token")
+    monkeypatch.setattr(main_module, "SessionOrchestrator", DummySessionOrchestrator)
+    monkeypatch.setattr(
+        main_module,
+        "parse_args",
+        lambda: argparse.Namespace(
+            create_agent=False,
+            run_pipeline=None,
+            retry_pipeline=None,
+            skip_validation=True,
+            model="demo-model",
+            mode="dnd",
+            rounds=1,
+            no_continue=True,
+            temperature=None,
+            no_producer=False,
+            fire_worst=False,
+        ),
+    )
+    prompts = iter(["Recover the ember crown from the drowned keep."])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(prompts))
+
+    main_module.main()
+
+    output = capsys.readouterr().out
+    orchestrator = DummySessionOrchestrator.instance
+    assert orchestrator.config["producer_enabled"] is False
+    assert orchestrator.config["include_custom_agents"] is False
+    assert "D&D mode runs without The Producer" in output
+    assert "THE PRODUCER'S VERDICT" not in output
+    assert "Story needs" not in output
 
 
 def test_main_create_agent_mode_imports_lib_custom_agents(monkeypatch):
@@ -211,6 +418,7 @@ def test_main_run_pipeline_mode_uses_saved_final_draft(monkeypatch):
         "generate_pipeline_report_from_draft",
         fake_generate_pipeline_report_from_draft,
     )
+    monkeypatch.setattr(main_module, "get_pipeline_failures", lambda pipeline_dir: None)
 
     main_module.main()
 
@@ -242,6 +450,7 @@ def test_main_retry_pipeline_mode_delegates_to_retry_helper(monkeypatch):
         "retry_failed_pipeline_items",
         fake_retry_failed_pipeline_items,
     )
+    monkeypatch.setattr(main_module, "get_pipeline_failures", lambda pipeline_dir: None)
 
     main_module.main()
 

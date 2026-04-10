@@ -6,12 +6,11 @@ An elite AI writers room where legendary authors collaborate around
 a shared "Center Table" to create unforgettably potent stories.
 """
 
-import os
-import sys
 import argparse
 import json
-import re
-from datetime import datetime
+import os
+import sys
+from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
@@ -35,28 +34,13 @@ except ImportError:  # pragma: no cover - exercised in thin local installs
     Fore = _ColorFallback()
     Style = _ColorFallback()
 
-from lib.agents import Agent
-from lib.artifacts import build_artifact_paths
 from lib.pipeline import (
     generate_pipeline_report_from_draft,
     get_pipeline_failures,
     retry_failed_pipeline_items,
 )
-from lib.story_state import StoryStateManager
-from lib.personalities import (
-    PRODUCER,
-    STORY_MODES,
-    DEFAULT_MODEL,
-    get_agent_roster,
-    get_producer_mode_criteria,
-    get_session_opening_prompt,
-    is_dnd_mode,
-)
-from lib.session_briefing import render_session_brief
-from lib.session_turns import (
-    build_dnd_story_context,
-    generate_dnd_turn,
-)
+from lib.personalities import STORY_MODES, DEFAULT_MODEL, is_dnd_mode
+from lib.session import SessionEvent, SessionOrchestrator
 
 # Initialize colorama for cross-platform colored terminal output
 init(autoreset=True)
@@ -71,12 +55,18 @@ CLI_COLOR_BY_HEX = {
     "#98C379": Fore.GREEN,
 }
 
+ACT_NAME_BY_VALUE = {
+    1: "SETUP",
+    2: "CONFRONTATION",
+    3: "RESOLUTION",
+}
+
 
 def print_banner():
     """Print the Writers Room banner."""
-    print(f"\n{Fore.CYAN}{'='*60}")
+    print(f"\n{Fore.CYAN}{'=' * 60}")
     print(f"{Fore.CYAN}    WRITERS ROOM: COLLABORATIVE STORY EXCELLENCE")
-    print(f"{Fore.CYAN}{'='*60}\n")
+    print(f"{Fore.CYAN}{'=' * 60}\n")
 
 
 def print_agent_response(agent_name: str, response: str, color: str):
@@ -88,74 +78,172 @@ def print_agent_response(agent_name: str, response: str, color: str):
         response: The agent's response text
         color: Colorama color constant (e.g., Fore.GREEN)
     """
-    print(f"\n{color}+-- {agent_name.upper()} {'-'*(55-len(agent_name))}")
+    print(f"\n{color}+-- {agent_name.upper()} {'-' * (55 - len(agent_name))}")
     print(f"{color}|")
-    # Wrap text for better readability
-    for line in response.split('\n'):
+    for line in response.split("\n"):
         print(f"{color}|  {line}")
-    print(f"{color}+{'-'*58}\n")
+    print(f"{color}+{'-' * 58}\n")
 
 
-def save_transcript(
-    prompt: str,
-    conversation_history: list,
-    *,
-    filename: str,
-    story_state=None,
-) -> str:
-    """
-    Save the conversation to a transcript file.
+def display_leaderboard(leaderboard: list[dict[str, Any]], round_num: int | None = None):
+    """Display the current leaderboard using orchestrator payload data."""
+    print(f"\n{Fore.GREEN}{'=' * 60}")
+    if round_num:
+        print(f"{Fore.GREEN}  LEADERBOARD - After Round {round_num}")
+    else:
+        print(f"{Fore.GREEN}  FINAL LEADERBOARD")
+    print(f"{Fore.GREEN}{'=' * 60}\n")
 
-    Args:
-        prompt: The initial prompt
-        conversation_history: List of all messages
-        story_state: Optional StoryState object for metadata
-        filename: Required output path
-    """
-    # Ensure directory exists
-    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    for rank, entry in enumerate(leaderboard, 1):
+        medal = "1st" if rank == 1 else "2nd" if rank == 2 else "3rd" if rank == 3 else f"{rank}th"
+        agent_name = entry.get("name", "Agent")
+        avg_score = entry.get("average", 0.0)
+        scores = entry.get("scores") or []
+        score_history = ", ".join(str(score) for score in scores)
+        print(f"{Fore.GREEN}{medal} {agent_name}: {avg_score:.1f}/10 avg ({score_history})")
 
-    with open(filename, 'w') as f:
-        f.write("="*60 + "\n")
-        if story_state and is_dnd_mode(story_state.mode):
-            f.write("WRITERS ROOM D&D TABLE TRANSCRIPT\n")
-        else:
-            f.write("WRITERS ROOM TRANSCRIPT\n")
-        f.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        if story_state:
-            f.write(f"Mode: {story_state.mode.upper()}\n")
-            f.write(f"Final Act: {story_state.current_act.name}\n")
-            f.write(f"Word Count: {story_state.word_count}\n")
-        f.write("="*60 + "\n\n")
+    print(f"{Fore.GREEN}{'=' * 60}\n")
 
-        if story_state and is_dnd_mode(story_state.mode):
-            f.write(f"ADVENTURE HOOK: {prompt}\n\n")
-            current_round = None
-            for msg in conversation_history:
-                if msg["role"] != "assistant":
-                    continue
-                msg_round = msg.get("round")
-                if msg_round != current_round:
-                    current_round = msg_round
-                    f.write("-" * 60 + "\n")
-                    f.write(f"ROUND {current_round}\n")
-                    f.write("-" * 60 + "\n\n")
-                f.write(f"{msg.get('name', 'AGENT')}: {msg['content']}\n\n")
-        else:
-            f.write(f"INITIAL PROMPT: {prompt}\n\n")
-            f.write("-"*60 + "\n\n")
 
-            for msg in conversation_history:
-                if msg['role'] == 'user':
-                    f.write(f"[USER]: {msg['content']}\n\n")
-                elif msg['role'] == 'assistant':
-                    f.write(f"{msg.get('name', 'AGENT')}: {msg['content']}\n\n")
+def display_story_state(state_payload: dict[str, Any] | None):
+    """Display the current story state from an orchestrator event payload."""
+    if not state_payload:
+        return
 
-            f.write("-"*60 + "\n")
-            f.write("END OF TRANSCRIPT\n")
+    mode = str(state_payload.get("mode", "horror"))
+    act_value = state_payload.get("current_act")
+    act_name = ACT_NAME_BY_VALUE.get(act_value, str(act_value or "UNKNOWN"))
+    tension_level = state_payload.get("tension_level", 0)
 
-    print(f"{Fore.CYAN}Transcript saved to: {filename}")
-    return filename
+    print(f"\n{Fore.MAGENTA}{'=' * 60}")
+    print(f"{Fore.MAGENTA}  CENTER TABLE: STORY STATE")
+    print(f"{Fore.MAGENTA}{'=' * 60}")
+    print(f"{Fore.MAGENTA}Mode: {mode.upper()} | Act: {act_name} | Tension: {tension_level}/10")
+
+    themes = state_payload.get("themes") or []
+    if themes:
+        print(f"{Fore.MAGENTA}Themes: {', '.join(themes[:3])}")
+
+    if is_dnd_mode(mode):
+        open_threads = state_payload.get("open_threads", 0)
+        word_count = state_payload.get("word_count", 0)
+        print(f"{Fore.MAGENTA}Open Threads: {open_threads} | Words: {word_count}")
+    else:
+        story_needs = state_payload.get("story_needs") or []
+        if story_needs:
+            print(f"{Fore.MAGENTA}Story needs: {story_needs[0]}")
+
+    print(f"{Fore.MAGENTA}{'=' * 60}\n")
+
+
+class CliSessionSink:
+    """Render SessionOrchestrator events to the terminal."""
+
+    def __init__(self):
+        self.pending_story_state: dict[str, Any] | None = None
+        self.latest_summary: dict[str, Any] | None = None
+        self.error_messages: list[str] = []
+        self._handlers = {
+            SessionEvent.SESSION_STARTED: self._on_session_started,
+            SessionEvent.SESSION_RESUMED: self._on_session_resumed,
+            SessionEvent.STORY_STATE_UPDATE: self._on_story_state_update,
+            SessionEvent.ROUND_STARTED: self._on_round_started,
+            SessionEvent.AGENT_RESPONSE: self._on_agent_response,
+            SessionEvent.PRODUCER_VERDICT: self._on_producer_verdict,
+            SessionEvent.SESSION_COMPLETED: self._on_session_completed,
+            SessionEvent.ERROR: self._on_error,
+        }
+
+    def __call__(self, event: str, payload: dict[str, Any]) -> None:
+        handler = self._handlers.get(event)
+        if handler is not None:
+            handler(payload)
+
+    @property
+    def had_error(self) -> bool:
+        return bool(self.error_messages)
+
+    def print_final_summary(self, *, fire_worst: bool) -> None:
+        """Print the final CLI summary from the last session completion payload."""
+        summary = self.latest_summary or {}
+        leaderboard = summary.get("leaderboard") or []
+        winner = summary.get("winner")
+        worst = summary.get("worst")
+
+        if leaderboard:
+            display_leaderboard(leaderboard)
+
+        if winner:
+            print(f"{Fore.GREEN}{'=' * 60}")
+            print(f"{Fore.GREEN}   WINNER: {winner['name']} with {winner['average']:.1f}/10 average!")
+            print(f"{Fore.GREEN}{'=' * 60}\n")
+
+        if fire_worst and worst:
+            print(f"{Fore.RED}{'=' * 60}")
+            print(f"{Fore.RED}   {worst['name']} has been FIRED!")
+            print(f"{Fore.RED}   (Lowest score: {worst['average']:.1f}/10)")
+            print(f"{Fore.RED}{'=' * 60}\n")
+
+        transcript_path = summary.get("transcript_path")
+        if transcript_path:
+            print(f"{Fore.CYAN}Transcript saved to: {transcript_path}")
+
+        brief_path = summary.get("brief_path")
+        if brief_path:
+            print(f"{Fore.CYAN}Session brief saved to: {brief_path}")
+
+    def _on_session_started(self, payload: dict[str, Any]) -> None:
+        for agent in payload.get("agent_roster", []):
+            color = CLI_COLOR_BY_HEX.get(agent.get("color"), Fore.WHITE)
+            specialty = agent.get("specialty", "")
+            print(f"{color}+ {agent.get('name', 'Agent')} ({specialty})")
+
+        config = payload.get("config") or {}
+        mode = payload.get("mode", "horror")
+        if config.get("producer_enabled"):
+            print(f"{Fore.GREEN}+ The Producer (Quality Evaluation)")
+        elif is_dnd_mode(mode):
+            print(f"{Fore.YELLOW}+ D&D mode runs without The Producer, leaderboard scoring, or story-needs prompts")
+
+    def _on_session_resumed(self, payload: dict[str, Any]) -> None:
+        self.latest_summary = None
+
+    def _on_story_state_update(self, payload: dict[str, Any]) -> None:
+        self.pending_story_state = payload.get("state")
+
+    def _on_round_started(self, payload: dict[str, Any]) -> None:
+        round_num = payload.get("round")
+        print(f"{Fore.CYAN}{'─' * 60}")
+        print(f"{Fore.CYAN}  ROUND {round_num}")
+        print(f"{Fore.CYAN}{'─' * 60}")
+        display_story_state(self.pending_story_state)
+        self.pending_story_state = None
+
+    def _on_agent_response(self, payload: dict[str, Any]) -> None:
+        color = CLI_COLOR_BY_HEX.get(payload.get("color"), Fore.WHITE)
+        print_agent_response(
+            payload.get("agent", "Agent"),
+            payload.get("response", ""),
+            color,
+        )
+
+    def _on_producer_verdict(self, payload: dict[str, Any]) -> None:
+        print(f"\n{Fore.GREEN}{'─' * 60}")
+        print(f"{Fore.GREEN}  THE PRODUCER'S VERDICT")
+        print(f"{Fore.GREEN}{'─' * 60}\n")
+        print_agent_response("The Producer", payload.get("response", ""), Fore.GREEN)
+
+        leaderboard = payload.get("leaderboard") or []
+        if leaderboard:
+            display_leaderboard(leaderboard, payload.get("round"))
+
+    def _on_session_completed(self, payload: dict[str, Any]) -> None:
+        self.latest_summary = payload
+
+    def _on_error(self, payload: dict[str, Any]) -> None:
+        message = payload.get("message", "Unknown error")
+        self.error_messages.append(message)
+        print(f"{Fore.RED}ERROR: {message}")
 
 
 def _handle_pipeline_cli_result(pipeline_dir: str, *, action_label: str) -> None:
@@ -228,275 +316,6 @@ def validate_api_key():
     return True, "API key validated successfully"
 
 
-def parse_producer_scores(producer_response: str, agent_names: list) -> dict:
-    """
-    Parse scores from Producer's response with robust fallbacks.
-
-    Supports multiple formats:
-    - "Agent Name: 7/10"
-    - "Agent Name ... 7/10"
-    - "Agent Name score: 7"
-    - "Agent Name 7 out of 10"
-    - "**Agent Name**: 7/10" (Markdown bold)
-    - Also handles aliases for agents with complex names
-
-    Args:
-        producer_response: The Producer's evaluation text
-        agent_names: List of agent names to look for
-
-    Returns:
-        Dictionary mapping agent names to scores (1-10)
-    """
-    import re
-    scores = {}
-
-    # Define aliases for agents with complex names
-    aliases = {
-        "RIP Tequila Bot": ["TM Bot", "Tequila Bot", "Tequila", "RIP Tequila", "Marketing Exec"],
-        "H.P. Lovecraft": ["HP Lovecraft", "Lovecraft"],
-        "Jorge Luis Borges": ["Borges", "Jorge Borges"],
-        "Rod Serling": ["Serling", "Rod"],
-        "Stephen King": ["King", "Stephen"],
-        "Robert Stack": ["Stack", "Robert"]
-    }
-
-    for agent_name in agent_names:
-        # Build list of names to check (full name + aliases)
-        names_to_check = [agent_name]
-        if agent_name in aliases:
-            names_to_check.extend(aliases[agent_name])
-
-        found_score_for_agent = False
-
-        for name_variant in names_to_check:
-            if found_score_for_agent:
-                break
-
-            # Try multiple patterns to be robust
-            patterns = [
-                rf"{re.escape(name_variant)}:\s*(\d+)\s*/\s*10",  # "Name: 7/10"
-                rf"{re.escape(name_variant)}.*?(\d+)\s*/\s*10",    # "Name ... 7/10"
-                rf"{re.escape(name_variant)}.*?score.*?(\d+)",      # "Name score: 7"
-                rf"{re.escape(name_variant)}.*?(\d+)\s*out of 10", # "Name 7 out of 10"
-                rf"\*\*?{re.escape(name_variant)}\*\*?.*?(\d+)/10", # "**Name**: 7/10" (Markdown bold)
-                rf"{re.escape(name_variant)}.*?(\d+)/10", # Generic catch-all near name
-            ]
-
-            for pattern in patterns:
-                match = re.search(pattern, producer_response, re.IGNORECASE | re.DOTALL)
-                if match:
-                    try:
-                        score = int(match.group(1))
-                        scores[agent_name] = max(1, min(10, score))
-                        found_score_for_agent = True
-                        break  # Found a score, stop trying patterns
-                    except (ValueError, IndexError):
-                        continue
-
-    # Fallback: Check for "Writer N" or "Writer #N" patterns if specific names aren't found
-    for i, agent_name in enumerate(agent_names):
-        if agent_name not in scores:
-            # Look for "Writer {i+1}" or "Writer #{i+1}"
-            writer_patterns = [
-                rf"Writer\s*#?{i+1}\s*.*?:.*?(\d+)/10",
-                rf"Writer\s*#?{i+1}\s*.*?(\d+)\s*out of 10",
-            ]
-            for pattern in writer_patterns:
-                match = re.search(pattern, producer_response, re.IGNORECASE)
-                if match:
-                    try:
-                        score = int(match.group(1))
-                        scores[agent_name] = max(1, min(10, score))
-                        break
-                    except ValueError:
-                        continue
-
-            if agent_name not in scores:
-                print(f"{Fore.YELLOW}Warning: Could not parse score for {agent_name}")
-
-    # Fallback: if no scores found, assign neutral scores
-    if not scores and agent_names:
-        print(f"{Fore.YELLOW}Warning: Could not parse any scores from Producer response")
-        # Assign 5/10 to all agents as fallback
-        scores = {name: 5 for name in agent_names}
-
-    return scores
-
-
-def display_leaderboard(agent_scores: dict, round_num: int = None):
-    """
-    Display the current leaderboard with agent scores.
-
-    Args:
-        agent_scores: Dictionary mapping agent names to list of scores
-        round_num: Current round number (optional)
-    """
-    print(f"\n{Fore.GREEN}{'='*60}")
-    if round_num:
-        print(f"{Fore.GREEN}  LEADERBOARD - After Round {round_num}")
-    else:
-        print(f"{Fore.GREEN}  FINAL LEADERBOARD")
-    print(f"{Fore.GREEN}{'='*60}\n")
-
-    # Calculate averages and sort
-    agent_averages = []
-    for agent_name, scores in agent_scores.items():
-        if scores:
-            avg_score = sum(scores) / len(scores)
-            agent_averages.append((agent_name, avg_score, scores))
-
-    # Sort by average score (descending)
-    agent_averages.sort(key=lambda x: x[1], reverse=True)
-
-    # Display rankings
-    for rank, (agent_name, avg_score, scores) in enumerate(agent_averages, 1):
-        medal = "1st" if rank == 1 else "2nd" if rank == 2 else "3rd" if rank == 3 else f"{rank}th"
-        score_history = ", ".join(str(s) for s in scores)
-        print(f"{Fore.GREEN}{medal} {agent_name}: {avg_score:.1f}/10 avg ({score_history})")
-
-    print(f"{Fore.GREEN}{'='*60}\n")
-
-
-def display_story_state(story_manager: StoryStateManager):
-    """Display the current story state."""
-    state = story_manager.get_state()
-    print(f"\n{Fore.MAGENTA}{'='*60}")
-    print(f"{Fore.MAGENTA}  CENTER TABLE: STORY STATE")
-    print(f"{Fore.MAGENTA}{'='*60}")
-    print(f"{Fore.MAGENTA}Mode: {state.mode.upper()} | Act: {state.current_act.name} | Tension: {state.tension_level}/10")
-    if state.themes:
-        print(f"{Fore.MAGENTA}Themes: {', '.join(state.themes[:3])}")
-    if is_dnd_mode(state.mode):
-        active_threads = state.get_active_threads()
-        print(f"{Fore.MAGENTA}Open Threads: {len(active_threads)} | Words: {state.word_count}")
-    else:
-        needs = state.get_story_needs()
-        print(f"{Fore.MAGENTA}Story needs: {needs[0]}")
-    print(f"{Fore.MAGENTA}{'='*60}\n")
-
-
-def run_single_round(
-    round_num: int,
-    agents: list,
-    conversation_history: list,
-    user_prompt: str,
-    producer_enabled: bool,
-    agent_producer,
-    agent_scores: dict,
-    story_manager: StoryStateManager = None
-):
-    """
-    Run a single round of the writers room.
-
-    Args:
-        round_num: Current round number
-        agents: List of (agent, color, display_name) tuples
-        conversation_history: Full conversation history (mutated in place)
-        user_prompt: The original user prompt
-        producer_enabled: Whether Producer is enabled
-        agent_producer: The Producer agent instance (or None)
-        agent_scores: Dictionary mapping agent names to list of scores (mutated in place)
-        story_manager: Optional StoryStateManager for collaborative mode
-    """
-    # Print round header
-    print(f"{Fore.CYAN}{'─'*60}")
-    print(f"{Fore.CYAN}  ROUND {round_num}")
-    print(f"{Fore.CYAN}{'─'*60}")
-
-    # Display story state if available
-    if story_manager:
-        display_story_state(story_manager)
-
-    # Each agent takes a turn
-    for agent, color, display_name in agents:
-        # Get story context for this agent if available
-        story_context = None
-        if story_manager:
-            if is_dnd_mode(story_manager.state.mode):
-                story_context = build_dnd_story_context(
-                    story_manager,
-                    conversation_history,
-                    display_name,
-                    round_num,
-                )
-            else:
-                story_context = story_manager.state.to_prompt_context()
-
-        if story_manager and is_dnd_mode(story_manager.state.mode):
-            response = generate_dnd_turn(
-                agent,
-                conversation_history,
-                story_context or "",
-                display_name,
-            )
-        else:
-            response = agent.generate_response(conversation_history, story_context=story_context)
-        print_agent_response(display_name, response, color)
-
-        # Add to conversation history
-        conversation_history.append({
-            "role": "assistant",
-            "content": response,
-            "name": display_name,
-            "round": round_num,
-        })
-
-        # Update story state
-        if story_manager:
-            story_manager.process_contribution(response, display_name, round_num)
-
-    # Producer evaluation after each round
-    if producer_enabled and agent_producer:
-        print(f"\n{Fore.GREEN}{'─'*60}")
-        print(f"{Fore.GREEN}  THE PRODUCER'S VERDICT")
-        print(f"{Fore.GREEN}{'─'*60}\n")
-
-        # Build context for Producer with agent names prepended so Producer knows who wrote what
-        round_context = []
-        for msg in conversation_history:
-            if msg['role'] == 'assistant' and 'name' in msg:
-                # Create a copy with the name prepended
-                new_msg = msg.copy()
-                new_msg['content'] = f"{msg['name']}: {msg['content']}"
-                round_context.append(new_msg)
-            else:
-                round_context.append(msg)
-
-        # Add instruction for Producer at the end with explicit agent names
-        agent_names = [name for _, _, name in agents]
-        agent_names_str = ", ".join(agent_names)
-
-        # Add mode-specific criteria if using story manager
-        mode_criteria = ""
-        if story_manager:
-            mode_criteria = f"\n\nMode-specific criteria: {get_producer_mode_criteria(story_manager.state.mode)}"
-
-        round_context.append({
-            "role": "user",
-            "content": f"Judge round {round_num}. Score these writers: [{agent_names_str}]. IMPORTANT: Use the EXACT names provided (e.g. 'Rod Serling: 7/10'). Do NOT use 'Writer 1' or aliases.{mode_criteria}"
-        })
-
-        # Get Producer context if available
-        producer_story_context = None
-        if story_manager:
-            producer_story_context = story_manager.get_producer_context()
-
-        producer_response = agent_producer.generate_response(round_context, story_context=producer_story_context)
-        print_agent_response("The Producer", producer_response, Fore.GREEN)
-
-        # Parse scores from Producer's response
-        round_scores = parse_producer_scores(producer_response, agent_names)
-
-        # Update score tracking
-        for agent_name, score in round_scores.items():
-            if agent_name in agent_scores:
-                agent_scores[agent_name].append(score)
-
-        # Display leaderboard if we got scores
-        if round_scores:
-            display_leaderboard(agent_scores, round_num)
-
-
 def select_story_mode() -> str:
     """Let user select a story mode."""
     print(f"\n{Fore.CYAN}Available Story Modes:")
@@ -520,57 +339,57 @@ def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description="Writers Room: AI agents collaborate on creative writing",
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "-r", "--rounds",
         type=int,
         default=None,
-        help="Number of rounds to run (default: prompt user)"
+        help="Number of rounds to run (default: prompt user)",
     )
     parser.add_argument(
         "-m", "--model",
         type=str,
         default=None,
-        help=f"Override model for all agents (default: {DEFAULT_MODEL})"
+        help=f"Override model for all agents (default: {DEFAULT_MODEL})",
     )
     parser.add_argument(
         "--mode",
         type=str,
         choices=list(STORY_MODES.keys()),
         default=None,
-        help="Story mode (horror, noir, comedy, sci-fi, literary, fantasy, dnd)"
+        help="Story mode (horror, noir, comedy, sci-fi, literary, fantasy, dnd)",
     )
     parser.add_argument(
         "--no-continue",
         action="store_true",
-        help="Don't prompt to continue after rounds complete"
+        help="Don't prompt to continue after rounds complete",
     )
     parser.add_argument(
         "--skip-validation",
         action="store_true",
-        help="Skip API key validation on startup (faster but riskier)"
+        help="Skip API key validation on startup (faster but riskier)",
     )
     parser.add_argument(
         "-t", "--temperature",
         type=float,
         default=None,
-        help="Override temperature for all agents (0.0-2.0, default: 0.9)"
+        help="Override temperature for all agents (0.0-2.0, default: 0.9)",
     )
     parser.add_argument(
         "--no-producer",
         action="store_true",
-        help="Disable The Producer agent"
+        help="Disable The Producer agent",
     )
     parser.add_argument(
         "--fire-worst",
         action="store_true",
-        help="Producer fires the worst performer at the end (requires Producer)"
+        help="Producer fires the worst performer at the end (requires Producer)",
     )
     parser.add_argument(
         "--create-agent",
         action="store_true",
-        help="Interactive mode to create a custom agent"
+        help="Interactive mode to create a custom agent",
     )
     parser.add_argument(
         "--run-pipeline",
@@ -596,11 +415,51 @@ def parse_args():
     return parser.parse_args()
 
 
+def _prompt_for_rounds(args: argparse.Namespace) -> int:
+    """Return the requested number of rounds, prompting when needed."""
+    if args.rounds:
+        return args.rounds
+
+    try:
+        rounds_input = input(f"{Fore.WHITE}Number of rounds (default 3): {Style.RESET_ALL}").strip()
+        rounds = int(rounds_input) if rounds_input else 3
+        if rounds < 1:
+            print(f"{Fore.YELLOW}Using minimum of 1 round.")
+            return 1
+        return rounds
+    except ValueError:
+        print(f"{Fore.YELLOW}Invalid input. Using 3 rounds.")
+        return 3
+
+
+def _build_cli_config(
+    *,
+    args: argparse.Namespace,
+    prompt: str,
+    rounds: int,
+    story_mode: str,
+    model_override: str,
+    temperature: float,
+) -> dict[str, Any]:
+    """Build the session config used by the shared orchestrator."""
+    return {
+        "prompt": prompt,
+        "rounds": rounds,
+        "mode": story_mode,
+        "model": model_override,
+        "temperature": temperature,
+        "producer_enabled": not args.no_producer and not is_dnd_mode(story_mode),
+        "fire_worst": args.fire_worst,
+        "voice_enabled": False,
+        "include_custom_agents": False,
+        "produce_final_draft": False,
+    }
+
+
 def main():
-    """Main orchestrator for the Writers Room."""
+    """Main orchestrator for the Writers Room CLI."""
     args = parse_args()
 
-    # Handle custom agent creation mode
     if args.create_agent:
         from lib.custom_agents import interactive_create_agent
         interactive_create_agent()
@@ -608,21 +467,18 @@ def main():
 
     print_banner()
 
-    # Validate API key
     if not args.skip_validation:
         print(f"{Fore.CYAN}Validating API key...")
         is_valid, message = validate_api_key()
-
         if not is_valid:
             print(f"{Fore.RED}ERROR: {message}")
             print(f"{Fore.YELLOW}Please check your .env file and ensure OPENROUTER_API_KEY is set.")
             print(f"{Fore.YELLOW}See .env.example for reference.")
             sys.exit(1)
+        if "Warning" in message:
+            print(f"{Fore.YELLOW}Warning: {message}")
         else:
-            if "Warning" in message:
-                print(f"{Fore.YELLOW}Warning: {message}")
-            else:
-                print(f"{Fore.GREEN}OK: {message}")
+            print(f"{Fore.GREEN}OK: {message}")
     else:
         if not os.getenv("OPENROUTER_API_KEY"):
             print(f"{Fore.RED}ERROR: OPENROUTER_API_KEY not found in environment.")
@@ -651,140 +507,61 @@ def main():
         )
         return
 
-    # Select story mode
-    if args.mode:
-        story_mode = args.mode
-    else:
-        story_mode = select_story_mode()
-
+    story_mode = args.mode or select_story_mode()
     mode_info = STORY_MODES.get(story_mode, STORY_MODES["horror"])
     print(f"\n{Fore.MAGENTA}Story Mode: {mode_info['name']}")
     print(f"{Fore.MAGENTA}{mode_info['atmosphere']}\n")
 
-    # Initialize the session roster
     print(f"{Fore.CYAN}Initializing collaborative writers room...\n")
 
-    # Use model and temperature overrides if provided
     model_override = args.model or DEFAULT_MODEL
     temperature = args.temperature if args.temperature is not None else 0.9
 
-    agent_roster = get_agent_roster(story_mode)
-
-    # The Producer is intentionally disabled for CLI D&D mode.
-    producer_enabled = not args.no_producer and not is_dnd_mode(story_mode)
-    agent_producer = None
-    if producer_enabled:
-        producer_prompt = PRODUCER + f"\n\nMode-specific focus: {get_producer_mode_criteria(story_mode)}"
-        agent_producer = Agent(
-            name="The Producer",
-            model=model_override,
-            system_prompt=producer_prompt,
-            temperature=0.7,  # Lower temperature for more consistent judging
-            max_tokens=300     # Producer needs more tokens to evaluate all 6 agents
-        )
-
-    agents = []
-    for spec in agent_roster:
-        max_tokens = 80
-        window_size = 15
-        if is_dnd_mode(story_mode):
-            max_tokens = 120 if spec["name"] == "Dungeon Master" else 90
-            window_size = 8
-        agents.append(
-            (
-                Agent(
-                    name=spec["name"],
-                    model=model_override,
-                    system_prompt=spec["system_prompt"],
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    window_size=window_size,
-                ),
-                CLI_COLOR_BY_HEX.get(spec["color"], Fore.WHITE),
-                spec["name"],
-            )
-        )
-
-    # Initialize scoring system
-    agent_scores = {spec["name"]: [] for spec in agent_roster}
-
-    for spec in agent_roster:
-        color = CLI_COLOR_BY_HEX.get(spec["color"], Fore.WHITE)
-        print(f"{color}+ {spec['name']} ({spec['specialty']})")
-    if producer_enabled:
-        print(f"{Fore.GREEN}+ The Producer (Quality Evaluation)")
-    elif is_dnd_mode(story_mode):
-        print(f"{Fore.YELLOW}+ D&D mode runs without The Producer, leaderboard scoring, or story-needs prompts")
-
-    print(f"\n{Fore.YELLOW}Model: {model_override}")
-
-    if args.temperature is not None:
-        print(f"{Fore.YELLOW}Temperature: {temperature}")
-
-    # Get user's starting prompt
-    print(f"\n{Fore.CYAN}{'─'*60}")
     user_prompt = input(f"{Fore.WHITE}Enter your story prompt: {Style.RESET_ALL}").strip()
-
     if not user_prompt:
         print(f"{Fore.RED}No prompt provided. Exiting.")
         sys.exit(0)
 
-    # Initialize story state manager
-    story_manager = StoryStateManager(premise=user_prompt, mode=story_mode)
+    rounds = _prompt_for_rounds(args)
+    print(f"{Fore.CYAN}{'─' * 60}\n")
 
-    # Get number of rounds (from CLI or prompt user)
-    if args.rounds:
-        rounds = args.rounds
-    else:
-        try:
-            rounds_input = input(f"{Fore.WHITE}Number of rounds (default 3): {Style.RESET_ALL}").strip()
-            rounds = int(rounds_input) if rounds_input else 3
-            if rounds < 1:
-                print(f"{Fore.YELLOW}Using minimum of 1 round.")
-                rounds = 1
-        except ValueError:
-            print(f"{Fore.YELLOW}Invalid input. Using 3 rounds.")
-            rounds = 3
+    sink = CliSessionSink()
+    orchestrator = SessionOrchestrator(sink)
+    config = _build_cli_config(
+        args=args,
+        prompt=user_prompt,
+        rounds=rounds,
+        story_mode=story_mode,
+        model_override=model_override,
+        temperature=temperature,
+    )
+    orchestrator.initialize(user_prompt, config)
 
-    print(f"{Fore.CYAN}{'─'*60}\n")
+    print(f"\n{Fore.YELLOW}Model: {model_override}")
+    if args.temperature is not None:
+        print(f"{Fore.YELLOW}Temperature: {temperature}")
 
-    # Initialize conversation history
-    conversation_history = [
-        {"role": "user", "content": get_session_opening_prompt(story_mode, user_prompt)}
-    ]
+    total_rounds = rounds
+    print(f"\n{Fore.CYAN}Starting {rounds} rounds of collaborative storytelling...\n")
+    orchestrator.run_session(rounds)
+    if sink.had_error:
+        sys.exit(1)
 
-    # Run rounds of collaboration
-    print(f"{Fore.CYAN}Starting {rounds} rounds of collaborative storytelling...\n")
-
-    for round_num in range(1, rounds + 1):
-        run_single_round(
-            round_num=round_num,
-            agents=agents,
-            conversation_history=conversation_history,
-            user_prompt=user_prompt,
-            producer_enabled=producer_enabled,
-            agent_producer=agent_producer,
-            agent_scores=agent_scores,
-            story_manager=story_manager
-        )
-
-    # Initial rounds complete
-    print(f"\n{Fore.CYAN}{'='*60}")
+    print(f"\n{Fore.CYAN}{'=' * 60}")
     print(f"{Fore.CYAN}  ROUNDS COMPLETE")
-    print(f"{Fore.CYAN}{'='*60}\n")
+    print(f"{Fore.CYAN}{'=' * 60}\n")
 
-    # Ask if user wants to continue (unless disabled)
     if not args.no_continue:
         while True:
-            continue_choice = input(f"{Fore.WHITE}Continue with more rounds? (y/n or number of rounds): {Style.RESET_ALL}").strip().lower()
+            continue_choice = input(
+                f"{Fore.WHITE}Continue with more rounds? (y/n or number of rounds): {Style.RESET_ALL}"
+            ).strip().lower()
 
-            if continue_choice in ['n', 'no']:
+            if continue_choice in ["n", "no"]:
                 break
-            elif continue_choice in ['y', 'yes']:
-                # Default to 1 more round
+            if continue_choice in ["y", "yes"]:
                 additional_rounds = 1
             else:
-                # Try to parse as number
                 try:
                     additional_rounds = int(continue_choice)
                     if additional_rounds < 1:
@@ -794,92 +571,17 @@ def main():
                     print(f"{Fore.YELLOW}Please enter 'y', 'n', or a number.")
                     continue
 
-            # Run additional rounds
             print(f"\n{Fore.CYAN}Continuing with {additional_rounds} more round(s)...\n")
-            current_round = rounds + 1
+            orchestrator.resume(additional_rounds)
+            if sink.had_error:
+                sys.exit(1)
 
-            for round_num in range(current_round, current_round + additional_rounds):
-                run_single_round(
-                    round_num=round_num,
-                    agents=agents,
-                    conversation_history=conversation_history,
-                    user_prompt=user_prompt,
-                    producer_enabled=producer_enabled,
-                    agent_producer=agent_producer,
-                    agent_scores=agent_scores,
-                    story_manager=story_manager
-                )
+            total_rounds += additional_rounds
+            print(f"\n{Fore.CYAN}{'=' * 60}")
+            print(f"{Fore.CYAN}  ROUNDS COMPLETE (Total: {total_rounds})")
+            print(f"{Fore.CYAN}{'=' * 60}\n")
 
-            rounds += additional_rounds
-            print(f"\n{Fore.CYAN}{'='*60}")
-            print(f"{Fore.CYAN}  ROUNDS COMPLETE (Total: {rounds})")
-            print(f"{Fore.CYAN}{'='*60}\n")
-
-    # Final results and winner declaration
-    if producer_enabled and agent_producer:
-        # Calculate final averages
-        agent_averages = []
-        for agent_name, scores in agent_scores.items():
-            if scores:
-                avg_score = sum(scores) / len(scores)
-                agent_averages.append((agent_name, avg_score, scores))
-
-        if agent_averages:
-            # Sort by average score
-            agent_averages.sort(key=lambda x: x[1], reverse=True)
-
-            # Display final leaderboard
-            display_leaderboard(agent_scores)
-
-            # Declare winner
-            winner_name, winner_score, _ = agent_averages[0]
-            print(f"{Fore.GREEN}{'='*60}")
-            print(f"{Fore.GREEN}   WINNER: {winner_name} with {winner_score:.1f}/10 average!")
-            print(f"{Fore.GREEN}{'='*60}\n")
-
-            # Optional: Fire worst performer
-            if args.fire_worst and len(agent_averages) > 1:
-                worst_name, worst_score, _ = agent_averages[-1]
-                print(f"{Fore.RED}{'='*60}")
-                print(f"{Fore.RED}   {worst_name} has been FIRED!")
-                print(f"{Fore.RED}   (Lowest score: {worst_score:.1f}/10)")
-                print(f"{Fore.RED}{'='*60}\n")
-
-    # Save transcript with story state
-    artifact_paths = build_artifact_paths(title=user_prompt)
-    transcript_path = save_transcript(
-        user_prompt,
-        conversation_history,
-        story_state=story_manager.state,
-        filename=str(artifact_paths.transcript_path),
-    )
-
-    final_averages = []
-    for agent_name, scores in agent_scores.items():
-        if scores:
-            avg_score = sum(scores) / len(scores)
-            final_averages.append((agent_name, avg_score, scores))
-    final_averages.sort(key=lambda item: item[1], reverse=True)
-    leaderboard = [
-        {
-            "name": name,
-            "average": round(avg_score, 1),
-            "scores": scores,
-        }
-        for name, avg_score, scores in final_averages
-    ]
-    brief_path = render_session_brief(
-        prompt=user_prompt,
-        mode=story_mode,
-        story_state=story_manager.state,
-        conversation_history=conversation_history,
-        leaderboard=leaderboard,
-        transcript_path=transcript_path,
-        output_path=artifact_paths.brief_path,
-    )
-    if brief_path:
-        print(f"{Fore.CYAN}Session brief saved to: {brief_path}")
-
+    sink.print_final_summary(fire_worst=args.fire_worst)
     print(f"\n{Fore.GREEN}The story is complete. Thank you for writing!\n")
 
 
