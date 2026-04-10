@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from lib.agents import AgentResult
 import lib.session as session_module
 
 
@@ -179,6 +180,105 @@ def test_session_orchestrator_cleans_dnd_prompt_leakage(monkeypatch, tmp_path):
     assert all("we need to" not in response.lower() for response in responses)
     assert all("speak only as" not in response.lower() for response in responses)
     assert responses[0].startswith("The mirror ball jerks once")
+
+
+def test_session_orchestrator_quarantines_failed_agent_turn(monkeypatch, tmp_path):
+    class DummyAgent:
+        def __init__(self, name, **kwargs):
+            self.name = name
+
+        def generate_response(self, context, story_context=None):
+            if self.name == "Stephen King":
+                return AgentResult.failure("provider unavailable")
+            return f"{self.name} advances the scene."
+
+    monkeypatch.setattr(session_module, "Agent", DummyAgent)
+    monkeypatch.setattr(
+        session_module,
+        "render_session_brief",
+        lambda **kwargs: str(tmp_path / "brief.html"),
+    )
+
+    events = []
+    orchestrator = session_module.SessionOrchestrator(
+        lambda event, payload: events.append((event, payload))
+    )
+    config = {
+        "mode": "horror",
+        "rounds": 1,
+        "temperature": 0.9,
+        "producer_enabled": False,
+        "voice_enabled": False,
+        "include_custom_agents": False,
+        "prompt": "The stairwell keeps changing shape.",
+        "transcript_dir": str(tmp_path),
+    }
+
+    orchestrator.initialize(config["prompt"], config)
+    orchestrator.run_session(1)
+
+    agent_responses = [
+        payload["agent"]
+        for event, payload in events
+        if event == session_module.SessionEvent.AGENT_RESPONSE
+    ]
+    assert "Stephen King" not in agent_responses
+    assert any(
+        event == session_module.SessionEvent.ERROR
+        and "Stephen King failed during round 1" in payload["message"]
+        for event, payload in events
+    )
+    assert all(
+        message.get("name") != "Stephen King"
+        for message in orchestrator.conversation_history
+        if message.get("role") == "assistant"
+    )
+
+
+def test_session_orchestrator_skips_failed_producer_verdict(monkeypatch, tmp_path):
+    class DummyAgent:
+        def __init__(self, name, **kwargs):
+            self.name = name
+
+        def generate_response(self, context, story_context=None):
+            if self.name == "The Producer":
+                return AgentResult.failure("provider unavailable")
+            return f"{self.name} contributes a clean beat."
+
+    monkeypatch.setattr(session_module, "Agent", DummyAgent)
+    monkeypatch.setattr(
+        session_module,
+        "render_session_brief",
+        lambda **kwargs: str(tmp_path / "brief.html"),
+    )
+
+    events = []
+    orchestrator = session_module.SessionOrchestrator(
+        lambda event, payload: events.append((event, payload))
+    )
+    config = {
+        "mode": "horror",
+        "rounds": 1,
+        "temperature": 0.9,
+        "producer_enabled": True,
+        "voice_enabled": False,
+        "include_custom_agents": False,
+        "prompt": "A train arrives with all the lights off.",
+        "transcript_dir": str(tmp_path),
+    }
+
+    orchestrator.initialize(config["prompt"], config)
+    orchestrator.run_session(1)
+
+    assert not orchestrator.producer_feedback
+    assert not any(
+        event == session_module.SessionEvent.PRODUCER_VERDICT for event, _ in events
+    )
+    assert any(
+        event == session_module.SessionEvent.ERROR
+        and "The Producer failed during round 1" in payload["message"]
+        for event, payload in events
+    )
 
 
 def test_session_resume_continues_from_correct_round(monkeypatch, tmp_path):

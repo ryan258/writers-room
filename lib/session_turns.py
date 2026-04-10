@@ -7,6 +7,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .agents import AgentResult, coerce_agent_result
+
 
 GENERAL_META_MARKERS = (
     "we need to",
@@ -278,14 +280,19 @@ def generate_dnd_turn(
     conversation_history: list[dict[str, Any]],
     story_context: str,
     display_name: str,
-) -> str:
+) -> AgentResult:
     """Generate a D&D turn with cleanup, retry, and fallback protection."""
     clean_history = build_clean_dnd_history(conversation_history)
 
-    response = agent.generate_response(clean_history, story_context=story_context)
-    cleaned = clean_dnd_table_talk(response)
+    response = coerce_agent_result(
+        agent.generate_response(clean_history, story_context=story_context)
+    )
+    if not response.ok:
+        return response
+
+    cleaned = clean_dnd_table_talk(response.content)
     if cleaned and not looks_like_dnd_meta_response(cleaned):
-        return cleaned
+        return AgentResult.success(cleaned)
 
     correction = clean_history + [
         {
@@ -296,12 +303,17 @@ def generate_dnd_turn(
             ),
         }
     ]
-    retry = agent.generate_response(correction, story_context=story_context)
-    retry_cleaned = clean_dnd_table_talk(retry)
-    if retry_cleaned and not looks_like_dnd_meta_response(retry_cleaned):
-        return retry_cleaned
+    retry = coerce_agent_result(
+        agent.generate_response(correction, story_context=story_context)
+    )
+    if not retry.ok:
+        return retry
 
-    return fallback_dnd_table_talk(display_name)
+    retry_cleaned = clean_dnd_table_talk(retry.content)
+    if retry_cleaned and not looks_like_dnd_meta_response(retry_cleaned):
+        return AgentResult.success(retry_cleaned)
+
+    return AgentResult.success(fallback_dnd_table_talk(display_name))
 
 
 def generate_story_turn(
@@ -309,12 +321,17 @@ def generate_story_turn(
     conversation_history: list[dict[str, Any]],
     story_context: str,
     display_name: str,
-) -> str:
+) -> AgentResult:
     """Generate a fiction turn and strip out any prompt leakage before display."""
-    response = agent.generate_response(conversation_history, story_context=story_context)
-    cleaned = clean_story_contribution(response)
+    response = coerce_agent_result(
+        agent.generate_response(conversation_history, story_context=story_context)
+    )
+    if not response.ok:
+        return response
+
+    cleaned = clean_story_contribution(response.content)
     if cleaned and not looks_like_story_meta_response(cleaned):
-        return cleaned
+        return AgentResult.success(cleaned)
 
     correction = conversation_history + [
         {
@@ -325,9 +342,14 @@ def generate_story_turn(
             ),
         }
     ]
-    retry = agent.generate_response(correction, story_context=story_context)
-    retry_cleaned = clean_story_contribution(retry)
-    if retry_cleaned and not looks_like_story_meta_response(retry_cleaned):
-        return retry_cleaned
+    retry = coerce_agent_result(
+        agent.generate_response(correction, story_context=story_context)
+    )
+    if not retry.ok:
+        return retry
 
-    return GENERIC_FALLBACK
+    retry_cleaned = clean_story_contribution(retry.content)
+    if retry_cleaned and not looks_like_story_meta_response(retry_cleaned):
+        return AgentResult.success(retry_cleaned)
+
+    return AgentResult.success(GENERIC_FALLBACK)

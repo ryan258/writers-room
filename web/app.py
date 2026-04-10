@@ -9,10 +9,15 @@ import inspect
 import os
 import sys
 import threading
+import time
+import uuid
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,6 +32,9 @@ FINAL_DIR = ROOT_DIR / "final"
 PIPELINES_DIR = ROOT_DIR / "pipelines"
 sys.path.append(str(ROOT_DIR))
 
+load_dotenv()
+
+from lib.config import ConfigError, RuntimeConfig, build_runtime_config, should_skip_api_validation
 from lib.custom_agents import CustomAgentManager, CustomAgent, list_templates
 from lib.personalities import STORY_MODES, DEFAULT_MODEL
 from lib.session import SessionOrchestrator, SessionEvent
@@ -36,6 +44,12 @@ from lib.voice import get_voice_manager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.loop = asyncio.get_running_loop()
+    try:
+        app.state.runtime_config, app.state.runtime_config_message = build_runtime_config(
+            validate_api_key=not should_skip_api_validation(),
+        )
+    except ConfigError as exc:
+        raise RuntimeError(f"Web startup configuration failed: {exc}") from exc
     yield
 
 
@@ -61,50 +75,360 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global session state
-current_session: Dict[str, Any] = {
-    "orchestrator": None,
-    "thread": None,
-    "active": False,
-    "last_transcript": None,
-    "last_brief": None,
-    "last_final_draft": None,
-    "last_pipeline_dir": None,
-}
+DEFAULT_EVENT_BUFFER_SIZE = 200
+DEFAULT_COMPLETED_SESSION_RETENTION_SECONDS = 60 * 60
+DEFAULT_STALE_SESSION_TIMEOUT_SECONDS = 60 * 60 * 2
+DEFAULT_THREAD_JOIN_TIMEOUT_SECONDS = 0.25
+
+
+@dataclass
+class SessionRecord:
+    session_id: str
+    orchestrator: Optional[SessionOrchestrator] = None
+    thread: Optional[threading.Thread] = None
+    active: bool = False
+    last_transcript: Optional[str] = None
+    last_brief: Optional[str] = None
+    last_final_draft: Optional[str] = None
+    last_pipeline_dir: Optional[str] = None
+    created_at: float = field(default_factory=time.monotonic)
+    updated_at: float = field(default_factory=time.monotonic)
+
+    def touch(self) -> None:
+        self.updated_at = time.monotonic()
+
+
+@dataclass(frozen=True)
+class BufferedEvent:
+    session_id: str
+    event_id: int
+    event: str
+    data: Dict[str, Any]
+
+    def as_message(self) -> Dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "event_id": self.event_id,
+            "event": self.event,
+            "data": self.data,
+        }
+
+
+class SessionManager:
+    def __init__(
+        self,
+        *,
+        completed_session_retention_seconds: float = DEFAULT_COMPLETED_SESSION_RETENTION_SECONDS,
+        stale_session_timeout_seconds: float = DEFAULT_STALE_SESSION_TIMEOUT_SECONDS,
+        thread_join_timeout_seconds: float = DEFAULT_THREAD_JOIN_TIMEOUT_SECONDS,
+    ) -> None:
+        self._lock = threading.RLock()
+        self._sessions: Dict[str, SessionRecord] = {}
+        self._latest_session_id: Optional[str] = None
+        self._completed_session_retention_seconds = completed_session_retention_seconds
+        self._stale_session_timeout_seconds = stale_session_timeout_seconds
+        self._thread_join_timeout_seconds = thread_join_timeout_seconds
+
+    def create_session(self) -> SessionRecord:
+        session_id = uuid.uuid4().hex
+        record = SessionRecord(session_id=session_id, active=True)
+        with self._lock:
+            self._sessions[session_id] = record
+            self._latest_session_id = session_id
+        return record
+
+    def _resolve_session_id_locked(self, session_id: Optional[str]) -> Optional[str]:
+        if session_id is not None:
+            return session_id if session_id in self._sessions else None
+        if self._latest_session_id and self._latest_session_id in self._sessions:
+            return self._latest_session_id
+        return None
+
+    def resolve_session_id(self, session_id: Optional[str] = None) -> Optional[str]:
+        with self._lock:
+            return self._resolve_session_id_locked(session_id)
+
+    def get_session_snapshot(self, session_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            resolved_id = self._resolve_session_id_locked(session_id)
+            if resolved_id is None:
+                return None
+            record = self._sessions[resolved_id]
+            return {
+                "session_id": record.session_id,
+                "orchestrator": record.orchestrator,
+                "thread": record.thread,
+                "active": record.active,
+                "last_transcript": record.last_transcript,
+                "last_brief": record.last_brief,
+                "last_final_draft": record.last_final_draft,
+                "last_pipeline_dir": record.last_pipeline_dir,
+                "created_at": record.created_at,
+                "updated_at": record.updated_at,
+            }
+
+    def get_orchestrator(self, session_id: Optional[str]) -> Optional[SessionOrchestrator]:
+        with self._lock:
+            resolved_id = self._resolve_session_id_locked(session_id)
+            if resolved_id is None:
+                return None
+            return self._sessions[resolved_id].orchestrator
+
+    def set_orchestrator(self, session_id: str, orchestrator: SessionOrchestrator) -> None:
+        with self._lock:
+            record = self._sessions.get(session_id)
+            if record is None:
+                return
+            record.orchestrator = orchestrator
+            record.active = True
+            record.touch()
+
+    def attach_thread(self, session_id: str, thread: threading.Thread) -> None:
+        with self._lock:
+            record = self._sessions.get(session_id)
+            if record is None:
+                return
+            record.thread = thread
+            record.active = True
+            record.touch()
+        watcher = threading.Thread(
+            target=self._watch_thread,
+            args=(session_id, thread),
+            daemon=True,
+            name=f"writers-room-join-{session_id[:8]}",
+        )
+        watcher.start()
+
+    def _watch_thread(self, session_id: str, thread: threading.Thread) -> None:
+        thread.join()
+        with self._lock:
+            record = self._sessions.get(session_id)
+            if record is None or record.thread is not thread:
+                return
+            record.thread = None
+            record.active = False
+            record.touch()
+
+    def clear_session_artifacts(self, session_id: str) -> None:
+        with self._lock:
+            record = self._sessions.get(session_id)
+            if record is None:
+                return
+            record.last_transcript = None
+            record.last_brief = None
+            record.last_final_draft = None
+            record.last_pipeline_dir = None
+            record.touch()
+
+    def mark_active(self, session_id: str, active: bool) -> None:
+        with self._lock:
+            record = self._sessions.get(session_id)
+            if record is None:
+                return
+            record.active = active
+            record.touch()
+
+    def touch(self, session_id: str) -> None:
+        with self._lock:
+            record = self._sessions.get(session_id)
+            if record is not None:
+                record.touch()
+
+    def update_artifacts(self, session_id: str, orchestrator: Optional[SessionOrchestrator]) -> None:
+        if orchestrator is None:
+            return
+        with self._lock:
+            record = self._sessions.get(session_id)
+            if record is None:
+                return
+            record.orchestrator = orchestrator
+            record.last_transcript = orchestrator.transcript_path
+            record.last_brief = getattr(orchestrator, "brief_path", None)
+            record.last_final_draft = getattr(orchestrator, "final_draft_path", None)
+            record.last_pipeline_dir = getattr(orchestrator, "pipeline_dir", None)
+            record.touch()
+
+    def set_artifact_paths(
+        self,
+        session_id: str,
+        *,
+        transcript: Optional[str] = None,
+        brief: Optional[str] = None,
+        final_draft: Optional[str] = None,
+        pipeline_dir: Optional[str] = None,
+    ) -> None:
+        with self._lock:
+            record = self._sessions.get(session_id)
+            if record is None:
+                return
+            record.last_transcript = transcript
+            record.last_brief = brief
+            record.last_final_draft = final_draft
+            record.last_pipeline_dir = pipeline_dir
+            record.touch()
+
+    def cleanup_stale_sessions(self) -> List[str]:
+        now = time.monotonic()
+        timed_out: List[tuple[str, SessionRecord]] = []
+        removable: List[str] = []
+
+        with self._lock:
+            items = list(self._sessions.items())
+
+        for session_id, record in items:
+            thread = record.thread
+            thread_alive = thread.is_alive() if thread else False
+            age = now - record.updated_at
+            if record.active and thread_alive and age > self._stale_session_timeout_seconds:
+                timed_out.append((session_id, record))
+            elif (not record.active) and age > self._completed_session_retention_seconds:
+                removable.append(session_id)
+
+        for session_id, record in timed_out:
+            orchestrator = record.orchestrator
+            if orchestrator is not None:
+                orchestrator.stop()
+            thread = record.thread
+            if thread and thread.is_alive() and threading.current_thread() is not thread:
+                thread.join(timeout=self._thread_join_timeout_seconds)
+            with self._lock:
+                current = self._sessions.get(session_id)
+                if current is None or current is not record:
+                    continue
+                current.active = current.thread.is_alive() if current.thread else False
+                if not current.active:
+                    current.thread = None
+                current.touch()
+
+        removed: List[str] = []
+        with self._lock:
+            for session_id in removable:
+                record = self._sessions.get(session_id)
+                if record is None or record.active:
+                    continue
+                if now - record.updated_at <= self._completed_session_retention_seconds:
+                    continue
+                del self._sessions[session_id]
+                removed.append(session_id)
+
+            if self._latest_session_id not in self._sessions:
+                self._latest_session_id = next(reversed(self._sessions), None) if self._sessions else None
+
+        return removed
 
 # Custom agent manager
 custom_agent_manager = CustomAgentManager()
 
 
 class ConnectionManager:
-    def __init__(self) -> None:
-        self.active_connections: List[WebSocket] = []
+    def __init__(self, *, event_buffer_size: int = DEFAULT_EVENT_BUFFER_SIZE) -> None:
+        self._lock = threading.RLock()
+        self._event_buffer_size = event_buffer_size
+        self.active_connections: Dict[str, List[WebSocket]] = defaultdict(list)
+        self._event_buffers: Dict[str, deque[BufferedEvent]] = {}
+        self._event_counters: Dict[str, int] = defaultdict(int)
 
-    async def connect(self, websocket: WebSocket) -> None:
+    async def connect(
+        self,
+        websocket: WebSocket,
+        session_id: str,
+        *,
+        last_event_id: Optional[int] = None,
+    ) -> None:
         await websocket.accept()
-        self.active_connections.append(websocket)
+        replay_events: List[BufferedEvent] = []
+        latest_event_id = 0
+        with self._lock:
+            self.active_connections[session_id].append(websocket)
+            replay_events = [
+                event
+                for event in self._event_buffers.get(session_id, deque())
+                if last_event_id is None or event.event_id > last_event_id
+            ]
+            latest_event_id = self._event_counters.get(session_id, 0)
+        await self.send(
+            websocket,
+            "connected",
+            {
+                "status": "connected",
+                "session_id": session_id,
+                "last_event_id": latest_event_id,
+                "replayed_count": len(replay_events),
+            },
+            session_id=session_id,
+        )
+        for replay_event in replay_events:
+            await websocket.send_json(replay_event.as_message())
 
-    def disconnect(self, websocket: WebSocket) -> None:
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
+    def disconnect(self, websocket: WebSocket, session_id: Optional[str] = None) -> None:
+        with self._lock:
+            if session_id is not None:
+                session_connections = self.active_connections.get(session_id, [])
+                if websocket in session_connections:
+                    session_connections.remove(websocket)
+                if not session_connections and session_id in self.active_connections:
+                    del self.active_connections[session_id]
+                return
+            for active_session_id, session_connections in list(self.active_connections.items()):
+                if websocket in session_connections:
+                    session_connections.remove(websocket)
+                if not session_connections:
+                    del self.active_connections[active_session_id]
 
-    async def send(self, websocket: WebSocket, event: str, data: Dict[str, Any]) -> None:
-        await websocket.send_json({"event": event, "data": data})
-
-    async def broadcast(self, event: str, data: Dict[str, Any]) -> None:
-        if not self.active_connections:
-            return
+    async def send(
+        self,
+        websocket: WebSocket,
+        event: str,
+        data: Dict[str, Any],
+        *,
+        session_id: Optional[str] = None,
+        event_id: Optional[int] = None,
+    ) -> None:
         message = {"event": event, "data": data}
+        if session_id is not None:
+            message["session_id"] = session_id
+        if event_id is not None:
+            message["event_id"] = event_id
+        await websocket.send_json(message)
+
+    async def broadcast(self, session_id: str, event: str, data: Dict[str, Any]) -> Optional[int]:
+        with self._lock:
+            next_event_id = self._event_counters[session_id] + 1
+            self._event_counters[session_id] = next_event_id
+            buffer = self._event_buffers.setdefault(
+                session_id,
+                deque(maxlen=self._event_buffer_size),
+            )
+            buffered_event = BufferedEvent(
+                session_id=session_id,
+                event_id=next_event_id,
+                event=event,
+                data=data,
+            )
+            buffer.append(buffered_event)
+            connections = list(self.active_connections.get(session_id, []))
+
+        if not connections:
+            return next_event_id
+
         stale: List[WebSocket] = []
-        for ws in list(self.active_connections):
+        for ws in connections:
             try:
-                await ws.send_json(message)
+                await ws.send_json(buffered_event.as_message())
             except Exception:
                 stale.append(ws)
         for ws in stale:
-            self.disconnect(ws)
+            self.disconnect(ws, session_id=session_id)
+        return next_event_id
+
+    def drop_session(self, session_id: str) -> None:
+        with self._lock:
+            self.active_connections.pop(session_id, None)
+            self._event_buffers.pop(session_id, None)
+            self._event_counters.pop(session_id, None)
 
 
+session_manager = SessionManager()
 manager = ConnectionManager()
 
 
@@ -186,11 +510,28 @@ def _resolve_pipeline_index(pipeline_dir: str | Path) -> Path | None:
     return index_path
 
 
-def emit_event(event: str, data: Dict[str, Any]) -> None:
+def cleanup_stale_state() -> None:
+    """Prune expired sessions and their buffered websocket state."""
+    for session_id in session_manager.cleanup_stale_sessions():
+        manager.drop_session(session_id)
+
+
+def get_requested_session_id(request: Request) -> Optional[str]:
+    """Resolve the requested session id from query string or header."""
+    return request.query_params.get("session_id") or request.headers.get("X-Session-ID")
+
+
+def get_session_snapshot_for_request(request: Request) -> Optional[Dict[str, Any]]:
+    cleanup_stale_state()
+    return session_manager.get_session_snapshot(get_requested_session_id(request))
+
+
+def emit_event(session_id: str, event: str, data: Dict[str, Any]) -> None:
     """Thread-safe event emitter for SessionOrchestrator."""
+    session_manager.touch(session_id)
     loop = getattr(app.state, "loop", None)
     if loop:
-        asyncio.run_coroutine_threadsafe(manager.broadcast(event, data), loop)
+        asyncio.run_coroutine_threadsafe(manager.broadcast(session_id, event, data), loop)
 
 
 def render_template(request: Request, template_name: str, context: Optional[Dict[str, Any]] = None):
@@ -205,31 +546,30 @@ def render_template(request: Request, template_name: str, context: Optional[Dict
     return templates.TemplateResponse(template_name, template_context)
 
 
-def run_session_thread(prompt: str, rounds: int, config: Dict[str, Any]) -> None:
-    global current_session
-    try:
-        current_session["active"] = True
-        current_session["last_transcript"] = None
-        current_session["last_brief"] = None
-        current_session["last_final_draft"] = None
-        current_session["last_pipeline_dir"] = None
-        orchestrator = SessionOrchestrator(emit_event)
-        current_session["orchestrator"] = orchestrator
+def get_runtime_config() -> RuntimeConfig:
+    runtime_config = getattr(app.state, "runtime_config", None)
+    if runtime_config is None:
+        raise RuntimeError("Runtime config has not been initialized")
+    return runtime_config
 
+
+def run_session_thread(session_id: str, prompt: str, rounds: int, config: Dict[str, Any]) -> None:
+    orchestrator: Optional[SessionOrchestrator] = None
+    try:
+        session_manager.mark_active(session_id, True)
+        session_manager.clear_session_artifacts(session_id)
+        orchestrator = SessionOrchestrator(
+            lambda event, payload: emit_event(session_id, event, payload),
+            runtime_config=get_runtime_config(),
+        )
+        session_manager.set_orchestrator(session_id, orchestrator)
         orchestrator.initialize(prompt, config)
         orchestrator.run_session(rounds)
-        current_session["last_transcript"] = orchestrator.transcript_path
-        current_session["last_brief"] = getattr(orchestrator, "brief_path", None)
-        current_session["last_final_draft"] = getattr(
-            orchestrator, "final_draft_path", None
-        )
-        current_session["last_pipeline_dir"] = getattr(
-            orchestrator, "pipeline_dir", None
-        )
     except Exception as exc:
-        emit_event(SessionEvent.ERROR, {"message": str(exc)})
+        emit_event(session_id, SessionEvent.ERROR, {"message": str(exc)})
     finally:
-        current_session["active"] = False
+        session_manager.update_artifacts(session_id, orchestrator)
+        session_manager.mark_active(session_id, False)
 
 
 class StartRequest(BaseModel):
@@ -247,6 +587,7 @@ class StartRequest(BaseModel):
 
 
 class ContinueRequest(BaseModel):
+    session_id: Optional[str] = None
     rounds: int = Field(3, ge=1, le=10)
 
 
@@ -296,8 +637,7 @@ async def agents_page(request: Request):
 @app.post("/api/start")
 async def start_session(req: StartRequest):
     """Start a new writers room session."""
-    if current_session.get("active"):
-        return JSONResponse({"error": "Session already active"}, status_code=400)
+    cleanup_stale_state()
 
     prompt = req.prompt.strip()
     if not prompt:
@@ -312,72 +652,76 @@ async def start_session(req: StartRequest):
         config["include_custom_agents"] = False
         config["produce_final_draft"] = False
 
+    session = session_manager.create_session()
+
     # Start session in background thread
     thread = threading.Thread(
         target=run_session_thread,
-        args=(prompt, req.rounds, config),
+        args=(session.session_id, prompt, req.rounds, config),
         daemon=True,
+        name=f"writers-room-{session.session_id[:8]}",
     )
     thread.start()
-    current_session["thread"] = thread
+    session_manager.attach_thread(session.session_id, thread)
 
-    return {"status": "started"}
+    return {"status": "started", "session_id": session.session_id}
 
 
-def continue_session_thread(orchestrator: SessionOrchestrator, additional_rounds: int) -> None:
-    global current_session
+def continue_session_thread(session_id: str, additional_rounds: int) -> None:
+    orchestrator = session_manager.get_orchestrator(session_id)
+    if orchestrator is None:
+        return
     try:
-        current_session["active"] = True
-        current_session["last_transcript"] = None
-        current_session["last_brief"] = None
-        current_session["last_final_draft"] = None
-        current_session["last_pipeline_dir"] = None
+        session_manager.mark_active(session_id, True)
+        session_manager.clear_session_artifacts(session_id)
         orchestrator.resume(additional_rounds)
-        current_session["last_transcript"] = orchestrator.transcript_path
-        current_session["last_brief"] = getattr(orchestrator, "brief_path", None)
-        current_session["last_final_draft"] = getattr(
-            orchestrator, "final_draft_path", None
-        )
-        current_session["last_pipeline_dir"] = getattr(
-            orchestrator, "pipeline_dir", None
-        )
     except Exception as exc:
-        emit_event(SessionEvent.ERROR, {"message": str(exc)})
+        emit_event(session_id, SessionEvent.ERROR, {"message": str(exc)})
     finally:
-        current_session["active"] = False
+        session_manager.update_artifacts(session_id, orchestrator)
+        session_manager.mark_active(session_id, False)
 
 
 @app.post("/api/continue")
 async def continue_session(req: ContinueRequest):
     """Continue a completed session for additional rounds."""
-    if current_session.get("active"):
+    cleanup_stale_state()
+
+    session_id = session_manager.resolve_session_id(req.session_id)
+    if not session_id:
+        return JSONResponse({"error": "No session to continue. Start one first."}, status_code=400)
+
+    snapshot = session_manager.get_session_snapshot(session_id)
+    if snapshot and snapshot.get("active"):
         return JSONResponse({"error": "Session already active"}, status_code=400)
 
-    orchestrator = current_session.get("orchestrator")
+    orchestrator = session_manager.get_orchestrator(session_id)
     if not orchestrator:
         return JSONResponse({"error": "No session to continue. Start one first."}, status_code=400)
 
     thread = threading.Thread(
         target=continue_session_thread,
-        args=(orchestrator, req.rounds),
+        args=(session_id, req.rounds),
         daemon=True,
+        name=f"writers-room-resume-{session_id[:8]}",
     )
     thread.start()
-    current_session["thread"] = thread
+    session_manager.attach_thread(session_id, thread)
 
-    return {"status": "resumed", "additional_rounds": req.rounds}
+    return {"status": "resumed", "additional_rounds": req.rounds, "session_id": session_id}
 
 
 @app.get("/api/status")
-async def get_status():
+async def get_status(request: Request):
     """Get current session status."""
+    snapshot = get_session_snapshot_for_request(request)
     story_state = None
     config = {}
     agent_roster = []
 
-    orch = current_session.get("orchestrator")
+    orch = snapshot.get("orchestrator") if snapshot else None
     if orch:
-        if orch.story_manager and orch.active:
+        if orch.story_manager:
             story_state = orch._build_story_state_payload()
         config = orch.config
         agent_roster = [
@@ -390,22 +734,24 @@ async def get_status():
         ]
 
     return {
-        "active": current_session.get("active", False),
+        "session_id": snapshot.get("session_id") if snapshot else None,
+        "active": snapshot.get("active", False) if snapshot else False,
         "config": config,
         "mode_info": STORY_MODES.get(config.get("mode", "horror"), {}),
         "story_state": story_state,
         "agent_roster": agent_roster,
-        "last_transcript": current_session.get("last_transcript"),
-        "last_brief": current_session.get("last_brief"),
-        "last_final_draft": current_session.get("last_final_draft"),
-        "last_pipeline_dir": current_session.get("last_pipeline_dir"),
+        "last_transcript": snapshot.get("last_transcript") if snapshot else None,
+        "last_brief": snapshot.get("last_brief") if snapshot else None,
+        "last_final_draft": snapshot.get("last_final_draft") if snapshot else None,
+        "last_pipeline_dir": snapshot.get("last_pipeline_dir") if snapshot else None,
     }
 
 
 @app.get("/briefs/latest", response_class=FileResponse)
-async def get_latest_brief():
+async def get_latest_brief(request: Request):
     """Return the most recent generated session brief."""
-    brief_path = current_session.get("last_brief")
+    snapshot = get_session_snapshot_for_request(request)
+    brief_path = snapshot.get("last_brief") if snapshot else None
     if not brief_path:
         return JSONResponse({"error": "No session brief has been generated yet."}, status_code=404)
 
@@ -420,9 +766,10 @@ async def get_latest_brief():
 
 
 @app.get("/drafts/latest", response_class=FileResponse)
-async def get_latest_final_draft():
+async def get_latest_final_draft(request: Request):
     """Return the most recent generated final-draft Markdown file."""
-    draft_path = current_session.get("last_final_draft")
+    snapshot = get_session_snapshot_for_request(request)
+    draft_path = snapshot.get("last_final_draft") if snapshot else None
     if not draft_path:
         return JSONResponse({"error": "No final draft has been generated yet."}, status_code=404)
 
@@ -437,9 +784,10 @@ async def get_latest_final_draft():
 
 
 @app.get("/transcripts/latest", response_class=FileResponse)
-async def get_latest_transcript():
+async def get_latest_transcript(request: Request):
     """Return the most recent saved transcript file."""
-    transcript_path = current_session.get("last_transcript")
+    snapshot = get_session_snapshot_for_request(request)
+    transcript_path = snapshot.get("last_transcript") if snapshot else None
     if not transcript_path:
         return JSONResponse({"error": "No transcript has been saved yet."}, status_code=404)
 
@@ -454,9 +802,10 @@ async def get_latest_transcript():
 
 
 @app.get("/pipelines/latest", response_class=FileResponse)
-async def get_latest_pipeline_index():
+async def get_latest_pipeline_index(request: Request):
     """Return the ``index.md`` of the most recent pipeline directory."""
-    pipeline_dir = current_session.get("last_pipeline_dir")
+    snapshot = get_session_snapshot_for_request(request)
+    pipeline_dir = snapshot.get("last_pipeline_dir") if snapshot else None
     if not pipeline_dir:
         return JSONResponse({"error": "No pipeline has been generated yet."}, status_code=404)
 
@@ -505,17 +854,19 @@ async def list_custom_agents():
 @app.post("/api/agents")
 async def create_custom_agent(payload: AgentCreate):
     """Create a new custom agent."""
-    agent = CustomAgent(
-        id="",
-        name=payload.name,
-        specialty=payload.specialty,
-        guidance=payload.guidance or "",
-        voice_id=payload.voice_id or "alloy",
-        color=payload.color or "#888888",
-        avatar_emoji=payload.avatar_emoji or "pen",
-    )
-
-    filepath = custom_agent_manager.save_agent(agent)
+    try:
+        agent = CustomAgent(
+            id="",
+            name=payload.name,
+            specialty=payload.specialty,
+            guidance=payload.guidance or "",
+            voice_id=payload.voice_id or "alloy",
+            color=payload.color or "#888888",
+            avatar_emoji=payload.avatar_emoji or "pen",
+        )
+        filepath = custom_agent_manager.save_agent(agent)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
 
     return {
         "status": "created",
@@ -546,28 +897,18 @@ async def update_custom_agent(agent_id: str, payload: AgentUpdate):
     if not agent:
         return JSONResponse({"error": "Agent not found"}, status_code=404)
 
-    data = payload.model_dump(exclude_unset=True)
+    updated_data = agent.to_dict()
+    updated_data.update(payload.model_dump(exclude_unset=True))
 
-    if "name" in data:
-        agent.name = data["name"]
-    if "specialty" in data:
-        agent.specialty = data["specialty"]
-    if "guidance" in data:
-        agent.guidance = data["guidance"]
-    if "voice_id" in data:
-        agent.voice_id = data["voice_id"]
-    if "color" in data:
-        agent.color = data["color"]
-    if "avatar_emoji" in data:
-        agent.avatar_emoji = data["avatar_emoji"]
-    if "is_active" in data:
-        agent.is_active = data["is_active"]
-
-    filepath = custom_agent_manager.save_agent(agent)
+    try:
+        updated_agent = CustomAgent.from_dict(updated_data)
+        filepath = custom_agent_manager.save_agent(updated_agent)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
 
     return {
         "status": "updated",
-        "agent": agent.to_dict(),
+        "agent": updated_agent.to_dict(),
         "filepath": filepath,
     }
 
@@ -588,13 +929,40 @@ async def delete_custom_agent(agent_id: str):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket connection for realtime session events."""
-    await manager.connect(websocket)
-    await manager.send(websocket, "connected", {"status": "connected"})
+    cleanup_stale_state()
+    requested_session_id = websocket.query_params.get("session_id")
+    resolved_session_id = session_manager.resolve_session_id(requested_session_id)
+    if resolved_session_id is None:
+        await websocket.accept()
+        await manager.send(
+            websocket,
+            "connected",
+            {
+                "status": "idle",
+                "session_id": None,
+                "last_event_id": 0,
+                "replayed_count": 0,
+            },
+        )
+        await websocket.close()
+        return
+
+    last_event_id_raw = websocket.query_params.get("last_event_id")
+    try:
+        last_event_id = int(last_event_id_raw) if last_event_id_raw is not None else None
+    except ValueError:
+        last_event_id = None
+
+    await manager.connect(
+        websocket,
+        resolved_session_id,
+        last_event_id=last_event_id,
+    )
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        manager.disconnect(websocket, session_id=resolved_session_id)
 
 
 if __name__ == "__main__":

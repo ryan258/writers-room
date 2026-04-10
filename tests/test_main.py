@@ -137,8 +137,9 @@ def test_build_clean_dnd_history_filters_meta_turns():
 
 
 class DummySessionOrchestrator:
-    def __init__(self, event_callback):
+    def __init__(self, event_callback, runtime_config=None):
         self.event_callback = event_callback
+        self.runtime_config = runtime_config
         self.initialize_calls = []
         self.run_calls = []
         self.resume_calls = []

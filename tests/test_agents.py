@@ -1,6 +1,14 @@
 from types import SimpleNamespace
 
-from lib.agents import Agent
+from lib.agents import Agent, AgentResult
+from lib.config import RuntimeConfig
+
+
+TEST_RUNTIME_CONFIG = RuntimeConfig(
+    openrouter_api_key="sk-or-v1-test-token",
+    site_url="http://localhost",
+    site_name="Writers Room Tests",
+)
 
 
 class DummyCompletions:
@@ -24,12 +32,23 @@ class DummyClient:
         self.chat = SimpleNamespace(completions=DummyCompletions(content))
 
 
+class FailingCompletions:
+    def create(self, **kwargs):
+        raise RuntimeError("provider unavailable")
+
+
+class FailingClient:
+    def __init__(self):
+        self.chat = SimpleNamespace(completions=FailingCompletions())
+
+
 def test_generate_response_preserves_prompt_and_truncates_recent_context():
     agent = Agent(
         name="Tester",
         model="fake/model",
         system_prompt="Base prompt",
         window_size=4,
+        runtime_config=TEST_RUNTIME_CONFIG,
     )
     dummy_client = DummyClient("Fresh contribution.")
     agent.client = dummy_client
@@ -45,7 +64,8 @@ def test_generate_response_preserves_prompt_and_truncates_recent_context():
 
     response = agent.generate_response(context, story_context="CENTER TABLE")
 
-    assert response == "Fresh contribution."
+    assert response.ok is True
+    assert response.content == "Fresh contribution."
     messages = dummy_client.chat.completions.calls[0]["messages"]
     assert messages[0]["role"] == "system"
     assert messages[0]["content"] == "Base prompt"
@@ -66,6 +86,7 @@ def test_generate_response_strips_ellipsis_echoes():
         name="Tester",
         model="fake/model",
         system_prompt="Base prompt",
+        runtime_config=TEST_RUNTIME_CONFIG,
     )
     agent.client = DummyClient("... echoed setup. New sentence.")
 
@@ -73,7 +94,8 @@ def test_generate_response_strips_ellipsis_echoes():
         [{"role": "user", "content": "Prompt"}],
     )
 
-    assert response == "New sentence."
+    assert response.ok is True
+    assert response.content == "New sentence."
 
 
 def test_structured_output_extracts_json_key():
@@ -84,6 +106,7 @@ def test_structured_output_extracts_json_key():
         system_prompt="Base prompt",
         response_format={"type": "json_object"},
         json_key="line",
+        runtime_config=TEST_RUNTIME_CONFIG,
     )
     agent.client = DummyClient('{"line": "Cassian draws his rapier and steps forward."}')
 
@@ -91,7 +114,8 @@ def test_structured_output_extracts_json_key():
         [{"role": "user", "content": "Prompt"}],
     )
 
-    assert response == "Cassian draws his rapier and steps forward."
+    assert response.ok is True
+    assert response.content == "Cassian draws his rapier and steps forward."
 
 
 def test_structured_output_passes_response_format_to_api():
@@ -102,6 +126,7 @@ def test_structured_output_passes_response_format_to_api():
         system_prompt="Base prompt",
         response_format={"type": "json_object"},
         json_key="line",
+        runtime_config=TEST_RUNTIME_CONFIG,
     )
     dummy_client = DummyClient('{"line": "test"}')
     agent.client = dummy_client
@@ -120,6 +145,7 @@ def test_structured_output_falls_back_on_bad_json():
         system_prompt="Base prompt",
         response_format={"type": "json_object"},
         json_key="line",
+        runtime_config=TEST_RUNTIME_CONFIG,
     )
     agent.client = DummyClient("Cassian steps forward with rapier drawn.")
 
@@ -128,7 +154,8 @@ def test_structured_output_falls_back_on_bad_json():
     )
 
     # Falls back to raw text since JSON parsing fails
-    assert response == "Cassian steps forward with rapier drawn."
+    assert response.ok is True
+    assert response.content == "Cassian steps forward with rapier drawn."
 
 
 def test_structured_output_falls_back_on_missing_key():
@@ -139,6 +166,7 @@ def test_structured_output_falls_back_on_missing_key():
         system_prompt="Base prompt",
         response_format={"type": "json_object"},
         json_key="line",
+        runtime_config=TEST_RUNTIME_CONFIG,
     )
     agent.client = DummyClient('{"wrong_key": "some content"}')
 
@@ -146,7 +174,8 @@ def test_structured_output_falls_back_on_missing_key():
         [{"role": "user", "content": "Prompt"}],
     )
 
-    assert response == '{"wrong_key": "some content"}'
+    assert response.ok is True
+    assert response.content == '{"wrong_key": "some content"}'
 
 
 def test_no_response_format_omits_param_from_api_call():
@@ -155,6 +184,7 @@ def test_no_response_format_omits_param_from_api_call():
         name="Tester",
         model="fake/model",
         system_prompt="Base prompt",
+        runtime_config=TEST_RUNTIME_CONFIG,
     )
     dummy_client = DummyClient("Plain text.")
     agent.client = dummy_client
@@ -173,3 +203,30 @@ def test_parse_json_response_valid():
 def test_parse_json_response_invalid():
     assert Agent.parse_json_response("not json at all") is None
     assert Agent.parse_json_response("") is None
+
+
+def test_agent_requires_runtime_config():
+    try:
+        Agent(
+            name="Tester",
+            model="fake/model",
+            system_prompt="Base prompt",
+        )
+    except ValueError as exc:
+        assert str(exc) == "Agent requires a RuntimeConfig"
+    else:  # pragma: no cover - defensive
+        raise AssertionError("Expected Agent construction to fail without runtime config")
+
+
+def test_generate_response_returns_structured_failure_on_exception():
+    agent = Agent(
+        name="Tester",
+        model="fake/model",
+        system_prompt="Base prompt",
+        runtime_config=TEST_RUNTIME_CONFIG,
+    )
+    agent.client = FailingClient()
+
+    response = agent.generate_response([{"role": "user", "content": "Prompt"}])
+
+    assert response == AgentResult.failure("Tester failed to respond - provider unavailable")

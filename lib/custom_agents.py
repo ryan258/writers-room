@@ -6,6 +6,7 @@ specialties, guidance, and visual identity.
 """
 
 import json
+import os
 import uuid
 from dataclasses import dataclass, asdict
 from typing import Optional
@@ -43,6 +44,23 @@ class CustomAgent:
         if not self.created_at:
             from datetime import datetime
             self.created_at = datetime.now().isoformat()
+        self.validate()
+
+    def validate(self) -> None:
+        """Normalize and validate fields before persistence."""
+        self.name = (self.name or "").strip()
+        self.specialty = (self.specialty or "").strip()
+        self.guidance = (self.guidance or "").strip()
+        self.voice_id = (self.voice_id or "alloy").strip() or "alloy"
+        self.color = (self.color or "#888888").strip() or "#888888"
+        self.avatar_emoji = (self.avatar_emoji or "pen").strip() or "pen"
+
+        if not self.name:
+            raise ValueError("Agent name is required.")
+        if "/" in self.name or "\\" in self.name:
+            raise ValueError("Agent name cannot contain path separators.")
+        if not self.specialty:
+            raise ValueError("Agent specialty is required.")
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -66,11 +84,21 @@ OUTPUT ONLY YOUR NEW STORY CONTRIBUTION. No meta-commentary."""
         """
         Save this agent to a JSON file.
         """
+        self.validate()
         save_dir = directory or AGENTS_DIR
         save_dir.mkdir(parents=True, exist_ok=True)
 
         # Stable filename keyed by id to prevent orphaned files on rename
         filepath = save_dir / f"{self.id}.json"
+        tmp_path = filepath.with_suffix(f"{filepath.suffix}.tmp")
+
+        try:
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(self.to_dict(), f, indent=2)
+            os.replace(tmp_path, filepath)
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
 
         # Clean up any legacy filename variants (id_name.json)
         for legacy_path in save_dir.glob(f"{self.id}_*.json"):
@@ -78,9 +106,6 @@ OUTPUT ONLY YOUR NEW STORY CONTRIBUTION. No meta-commentary."""
                 legacy_path.unlink()
             except OSError:
                 pass
-
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(self.to_dict(), f, indent=2)
 
         return str(filepath)
 
@@ -237,6 +262,11 @@ class CustomAgentManager:
     def save_agent(self, agent: CustomAgent) -> str:
         """Save an agent and return the filepath."""
         self.ensure_directory()
+        agent.validate()
+        normalized_name = agent.name.casefold()
+        for existing in self.list_agents():
+            if existing.id != agent.id and existing.name.casefold() == normalized_name:
+                raise ValueError(f"Agent name '{agent.name}' already exists.")
         filepath = agent.save(self.agents_dir)
         self._cache[agent.id] = agent
         return filepath

@@ -46,13 +46,88 @@ let reconnectTimer = null;
 let reconnectAttempts = 0;
 let voiceAvailable = true;
 let currentMode = boot.defaultMode || "dnd";
+let currentSessionId = window.localStorage.getItem("writers-room.session-id") || "";
+let connectedSessionId = "";
+let skipNextCloseReconnect = false;
 const MAX_RECONNECT_DELAY_MS = 5000;
+const SESSION_ID_STORAGE_KEY = "writers-room.session-id";
+const LAST_EVENT_ID_PREFIX = "writers-room.last-event-id";
 
 function currentModeInfo() {
   return modeCatalog[currentMode] || modeCatalog.horror || {};
 }
 
+function eventCursorKey(sessionId) {
+  return `${LAST_EVENT_ID_PREFIX}:${sessionId}`;
+}
+
+function setCurrentSessionId(sessionId) {
+  currentSessionId = sessionId || "";
+  if (currentSessionId) {
+    window.localStorage.setItem(SESSION_ID_STORAGE_KEY, currentSessionId);
+    return;
+  }
+  window.localStorage.removeItem(SESSION_ID_STORAGE_KEY);
+}
+
+function clearLastEventId(sessionId = currentSessionId) {
+  if (!sessionId) {
+    return;
+  }
+  window.localStorage.removeItem(eventCursorKey(sessionId));
+}
+
+function getLastEventId(sessionId = currentSessionId) {
+  if (!sessionId) {
+    return null;
+  }
+  const rawValue = window.localStorage.getItem(eventCursorKey(sessionId));
+  if (!rawValue) {
+    return null;
+  }
+  const parsed = parseInt(rawValue, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function rememberLastEventId(eventId, sessionId = currentSessionId) {
+  if (!sessionId || !Number.isInteger(eventId)) {
+    return;
+  }
+  const current = getLastEventId(sessionId);
+  if (current !== null && eventId <= current) {
+    return;
+  }
+  window.localStorage.setItem(eventCursorKey(sessionId), String(eventId));
+}
+
+function sessionAwarePath(path, sessionId = currentSessionId) {
+  if (!sessionId) {
+    return path;
+  }
+  const url = new URL(path, window.location.origin);
+  url.searchParams.set("session_id", sessionId);
+  return `${url.pathname}${url.search}`;
+}
+
+function reconnectSocket() {
+  if (!currentSessionId) {
+    return;
+  }
+
+  if (socket) {
+    skipNextCloseReconnect = true;
+    socket.close();
+    return;
+  }
+
+  initSocket();
+}
+
 function initSocket() {
+  if (!currentSessionId) {
+    return;
+  }
+
   if (
     socket &&
     (socket.readyState === WebSocket.OPEN ||
@@ -62,7 +137,14 @@ function initSocket() {
   }
 
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  socket = new WebSocket(`${protocol}://${window.location.host}/ws`);
+  const socketUrl = new URL(`${protocol}://${window.location.host}/ws`);
+  socketUrl.searchParams.set("session_id", currentSessionId);
+  const lastEventId = getLastEventId();
+  if (lastEventId !== null) {
+    socketUrl.searchParams.set("last_event_id", String(lastEventId));
+  }
+  socket = new WebSocket(socketUrl.toString());
+  connectedSessionId = currentSessionId;
 
   socket.addEventListener("open", () => {
     reconnectAttempts = 0;
@@ -79,6 +161,15 @@ function initSocket() {
   socket.addEventListener("message", (event) => {
     try {
       const message = JSON.parse(event.data);
+      if (message && message.session_id && message.session_id !== currentSessionId) {
+        return;
+      }
+      if (message && message.session_id && !currentSessionId) {
+        setCurrentSessionId(message.session_id);
+      }
+      if (message && Number.isInteger(message.event_id)) {
+        rememberLastEventId(message.event_id, message.session_id || currentSessionId);
+      }
       if (message && message.event) {
         handleEvent(message.event, message.data || {});
       }
@@ -87,13 +178,27 @@ function initSocket() {
     }
   });
 
-  socket.addEventListener("close", scheduleReconnect);
+  socket.addEventListener("close", () => {
+    const shouldSkipReconnect = skipNextCloseReconnect;
+    skipNextCloseReconnect = false;
+    socket = null;
+    connectedSessionId = "";
+    if (shouldSkipReconnect) {
+      initSocket();
+      return;
+    }
+    scheduleReconnect();
+  });
   socket.addEventListener("error", (error) => {
     console.error("WebSocket error:", error);
   });
 }
 
 function scheduleReconnect() {
+  if (!currentSessionId) {
+    return;
+  }
+
   if (reconnectTimer) {
     return;
   }
@@ -150,10 +255,10 @@ function showSessionNote(message, links = []) {
 function buildArtifactLinks({ briefPath, finalDraftPath }) {
   const links = [];
   if (briefPath) {
-    links.push({ href: "/briefs/latest", label: "Open brief" });
+    links.push({ href: sessionAwarePath("/briefs/latest"), label: "Open brief" });
   }
   if (finalDraftPath) {
-    links.push({ href: "/drafts/latest", label: "Open final draft" });
+    links.push({ href: sessionAwarePath("/drafts/latest"), label: "Open final draft" });
   }
   return links;
 }
@@ -636,7 +741,7 @@ function updateArtifactLinks(state) {
   entries.forEach((spec) => {
     const li = document.createElement("li");
     const link = document.createElement("a");
-    link.href = spec.href;
+    link.href = sessionAwarePath(spec.href);
     link.target = "_blank";
     link.rel = "noopener noreferrer";
     link.title = state[spec.key];
@@ -733,6 +838,9 @@ function clearPreviousSession() {
 function handleEvent(eventName, data) {
   switch (eventName) {
     case "connected":
+      if (data.session_id && data.session_id !== currentSessionId) {
+        setCurrentSessionId(data.session_id);
+      }
       break;
     case "session_started":
       sessionActive = true;
@@ -968,12 +1076,23 @@ function handleEvent(eventName, data) {
 
 async function rehydrateSessionState() {
   try {
-    const response = await fetch("/api/status");
+    const response = await fetch(sessionAwarePath("/api/status"));
     if (!response.ok) {
       throw new Error(`Status request failed with ${response.status}`);
     }
 
     const status = await response.json();
+    if (status.session_id) {
+      setCurrentSessionId(status.session_id);
+    } else if (
+      !status.active &&
+      !status.last_transcript &&
+      !status.last_brief &&
+      !status.last_final_draft &&
+      !status.last_pipeline_dir
+    ) {
+      setCurrentSessionId("");
+    }
     sessionActive = Boolean(status.active);
 
     if (status.config && status.config.mode) {
@@ -992,6 +1111,9 @@ async function rehydrateSessionState() {
       applyAgentRoster(status.agent_roster || []);
       if (status.story_state) {
         updateStoryStatePanel(status.story_state);
+      }
+      if (currentSessionId && connectedSessionId !== currentSessionId) {
+        reconnectSocket();
       }
       return;
     }
@@ -1013,6 +1135,10 @@ async function rehydrateSessionState() {
       } else {
         clearSessionNote();
       }
+    }
+
+    if (currentSessionId && connectedSessionId !== currentSessionId) {
+      reconnectSocket();
     }
   } catch (error) {
     console.error("Failed to rehydrate session state:", error);
@@ -1074,6 +1200,11 @@ async function startSession() {
     if (!response.ok) {
       throw new Error(data.error || "Failed to start session");
     }
+    if (data.session_id) {
+      setCurrentSessionId(data.session_id);
+      clearLastEventId(data.session_id);
+      reconnectSocket();
+    }
   } catch (error) {
     console.error("Failed to start session:", error);
     setStartButtonState(false);
@@ -1100,6 +1231,11 @@ async function continueSession() {
     return;
   }
 
+  if (!currentSessionId) {
+    showSessionNote("There isn't a resumable session selected.");
+    return;
+  }
+
   const roundsInput = document.getElementById("continue-rounds");
   const rounds = roundsInput ? parseInt(roundsInput.value, 10) : 3;
 
@@ -1115,7 +1251,7 @@ async function continueSession() {
     const response = await fetch("/api/continue", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rounds }),
+      body: JSON.stringify({ session_id: currentSessionId, rounds }),
     });
 
     const data = await response.json();
@@ -1180,6 +1316,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   updateModeSelection(currentMode);
   clearPreviousSession();
-  initSocket();
-  checkVoiceAvailability();
+  Promise.resolve(rehydrateSessionState()).finally(() => {
+    initSocket();
+    checkVoiceAvailability();
+  });
 });

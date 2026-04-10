@@ -8,8 +8,9 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Callable
 
 from .story_state import StoryStateManager
-from .agents import Agent
+from .agents import Agent, coerce_agent_result
 from .artifacts import build_artifact_paths, extract_markdown_title
+from .config import RuntimeConfig
 from .custom_agents import CustomAgentManager
 from .personalities import (
     PRODUCER,
@@ -118,8 +119,13 @@ def parse_producer_scores(producer_response: str, agent_names: List[str]) -> Dic
     return scores
 
 class SessionOrchestrator:
-    def __init__(self, event_callback: Callable[[str, Dict[str, Any]], None]):
+    def __init__(
+        self,
+        event_callback: Callable[[str, Dict[str, Any]], None],
+        runtime_config: Optional[RuntimeConfig] = None,
+    ):
         self.emit = event_callback
+        self.runtime_config = runtime_config
         self.active = False
         self.agents = []
         self.producer = None
@@ -209,6 +215,7 @@ class SessionOrchestrator:
                 window_size=window_size,
                 response_format=response_format,
                 json_key=json_key,
+                runtime_config=self.runtime_config,
             )
             agents.append(
                 {
@@ -229,6 +236,7 @@ class SessionOrchestrator:
                     model=model_override,
                     system_prompt=custom.to_system_prompt(""),
                     temperature=temperature,
+                    runtime_config=self.runtime_config,
                 )
                 agents.append({
                     'agent': custom_agent,
@@ -256,6 +264,7 @@ class SessionOrchestrator:
                     temperature=0.7,
                     max_tokens=600,
                     response_format={"type": "json_object"},
+                    runtime_config=self.runtime_config,
                 )
              except Exception as e:
                 self.emit(SessionEvent.ERROR, {'message': f"Could not initialize Producer: {e}"})
@@ -339,6 +348,7 @@ class SessionOrchestrator:
          self.emit(SessionEvent.ROUND_STARTED, {'round': round_num, 'total': total_rounds})
          
          # Agents turn
+         successful_turns = 0
          for agent_info in self.agents:
              if self.stop_event.is_set(): return
              
@@ -369,12 +379,37 @@ class SessionOrchestrator:
                      story_context,
                      name,
                  )
+
+             if not response.ok:
+                 self.emit(
+                     SessionEvent.ERROR,
+                     {
+                         'message': f"{name} failed during round {round_num}: {response.error}",
+                         'agent': name,
+                         'round': round_num,
+                     },
+                 )
+                 continue
+
+             content = response.content.strip()
+             if not content:
+                 self.emit(
+                     SessionEvent.ERROR,
+                     {
+                         'message': f"{name} returned empty content during round {round_num}",
+                         'agent': name,
+                         'round': round_num,
+                     },
+                 )
+                 continue
              
-             self.story_manager.process_contribution(response, name, round_num)
+             successful_turns += 1
+
+             self.story_manager.process_contribution(content, name, round_num)
              
              self.conversation_history.append({
                  "role": "assistant",
-                 "content": response,
+                 "content": content,
                  "name": name,
                  "round": round_num,
              })
@@ -383,7 +418,7 @@ class SessionOrchestrator:
              if self.voice_enabled:
                  try:
                      audio_data = generate_agent_audio(
-                         response,
+                         content,
                          name,
                          voice_id_override=agent_info.get('voice_id')
                      )
@@ -392,7 +427,7 @@ class SessionOrchestrator:
                      
              self.emit(SessionEvent.AGENT_RESPONSE, {
                  'agent': name,
-                 'response': response,
+                 'response': content,
                  'color': color,
                  'round': round_num,
                  'audio': audio_data[0] if audio_data else None,
@@ -401,7 +436,16 @@ class SessionOrchestrator:
              
          # Producer turn
          if self.producer:
-             self._run_producer_turn(round_num)
+             if successful_turns:
+                 self._run_producer_turn(round_num)
+             else:
+                 self.emit(
+                     SessionEvent.ERROR,
+                     {
+                         'message': f"Skipping Producer for round {round_num}: no successful agent turns to score.",
+                         'round': round_num,
+                     },
+                 )
              
          self.emit(SessionEvent.ROUND_COMPLETED, {'round': round_num})
 
@@ -432,10 +476,34 @@ class SessionOrchestrator:
          })
 
          producer_story_context = self.story_manager.get_producer_context()
-         producer_response = self.producer.generate_response(
-             round_context,
-             story_context=producer_story_context
+         producer_result = coerce_agent_result(
+             self.producer.generate_response(
+                 round_context,
+                 story_context=producer_story_context
+             )
          )
+         if not producer_result.ok:
+             self.emit(
+                 SessionEvent.ERROR,
+                 {
+                     'message': f"The Producer failed during round {round_num}: {producer_result.error}",
+                     'agent': "The Producer",
+                     'round': round_num,
+                 },
+             )
+             return
+
+         producer_response = producer_result.content.strip()
+         if not producer_response:
+             self.emit(
+                 SessionEvent.ERROR,
+                 {
+                     'message': f"The Producer returned empty content during round {round_num}",
+                     'agent': "The Producer",
+                     'round': round_num,
+                 },
+             )
+             return
 
          # Try structured JSON first, fall back to regex parsing
          round_scores = self._parse_producer_json(producer_response, agent_names)
@@ -581,6 +649,7 @@ class SessionOrchestrator:
                     draft_path=self.final_draft_path,
                     model=self.config.get("model") or DEFAULT_MODEL,
                     output_dir=artifact_paths.pipeline_dir,
+                    runtime_config=self.runtime_config,
                 )
             except Exception as exc:
                 self.emit(
@@ -666,6 +735,7 @@ class SessionOrchestrator:
                 conversation_history=self.conversation_history,
                 story_state=self.story_manager.get_state() if self.story_manager else None,
                 emit=self.emit,
+                runtime_config=self.runtime_config,
             )
         except Exception as exc:
             self.emit(SessionEvent.ERROR, {'message': f"Final draft failed: {exc}"})

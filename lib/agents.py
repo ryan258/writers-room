@@ -3,20 +3,57 @@ Agent class for Writers Room AI agents.
 Each agent has a unique personality defined by its system prompt.
 """
 
+from dataclasses import dataclass
 import json
-import os
 import time
 from openai import OpenAI
-from dotenv import load_dotenv
 from typing import Any, Optional
 
-load_dotenv()
+from .config import RuntimeConfig
+
+
+@dataclass(frozen=True)
+class AgentResult:
+    """Structured result from a model call."""
+
+    ok: bool
+    content: str = ""
+    error: Optional[str] = None
+
+    @classmethod
+    def success(cls, content: str) -> "AgentResult":
+        return cls(ok=True, content=content)
+
+    @classmethod
+    def failure(cls, error: str) -> "AgentResult":
+        return cls(ok=False, error=error)
+
+
+def coerce_agent_result(value: Any) -> AgentResult:
+    """Normalize legacy string test doubles into the structured result shape."""
+    # TODO: Drop this once all test doubles and callsites return AgentResult.
+    if isinstance(value, AgentResult):
+        return value
+    if value is None:
+        return AgentResult.success("")
+    return AgentResult.success(str(value))
 
 
 class Agent:
     """An AI agent with a specific personality and model."""
 
-    def __init__(self, name: str, model: str, system_prompt: str, temperature: float = 0.9, max_tokens: int = 300, window_size: int = 15, response_format: Optional[dict[str, Any]] = None, json_key: Optional[str] = None):
+    def __init__(
+        self,
+        name: str,
+        model: str,
+        system_prompt: str,
+        temperature: float = 0.9,
+        max_tokens: int = 300,
+        window_size: int = 15,
+        response_format: Optional[dict[str, Any]] = None,
+        json_key: Optional[str] = None,
+        runtime_config: Optional[RuntimeConfig] = None,
+    ):
         """
         Initialize an AI agent.
 
@@ -38,14 +75,21 @@ class Agent:
         self.window_size = window_size
         self.response_format = response_format
         self.json_key = json_key
+        if runtime_config is None:
+            raise ValueError("Agent requires a RuntimeConfig")
+        self.runtime_config = runtime_config
 
         # Initialize OpenAI client pointing to OpenRouter
         self.client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
-            api_key=os.getenv("OPENROUTER_API_KEY"),
+            api_key=runtime_config.openrouter_api_key,
         )
 
-    def generate_response(self, context: list[dict], story_context: Optional[str] = None) -> str:
+    def generate_response(
+        self,
+        context: list[dict],
+        story_context: Optional[str] = None,
+    ) -> AgentResult:
         """
         Generate a response based on conversation context.
 
@@ -56,7 +100,7 @@ class Agent:
                           This provides the agent with the "Center Table" view
 
         Returns:
-            The agent's response as a string
+            Structured success/failure information for the model response
         """
         # Keep system prompt pure (agent identity only).
         # Story context is injected as a separate user message below
@@ -112,8 +156,8 @@ class Agent:
                     "model": self.model,
                     "messages": messages,
                     "extra_headers": {
-                        "HTTP-Referer": os.getenv("YOUR_SITE_URL", "http://localhost"),
-                        "X-Title": "YOUR_SITE_NAME",
+                        "HTTP-Referer": self.runtime_config.site_url,
+                        "X-Title": self.runtime_config.site_name,
                     },
                     "max_tokens": self.max_tokens,
                     "presence_penalty": 1.2,
@@ -130,7 +174,7 @@ class Agent:
                 if self.response_format and self.json_key:
                     extracted = self._extract_json_field(raw_response, self.json_key)
                     if extracted is not None:
-                        return extracted
+                        return AgentResult.success(extracted)
 
                 # POST-PROCESSING: Remove any echoed context
                 # If the response starts with "..." it's likely echoing truncated context
@@ -138,9 +182,9 @@ class Agent:
                     import re
                     sentences = re.split(r'(?<=[.!?])\s+', raw_response)
                     if len(sentences) > 1:
-                        return sentences[-1]
+                        return AgentResult.success(sentences[-1])
 
-                return raw_response
+                return AgentResult.success(raw_response)
 
             except Exception as e:
                 error_str = str(e)
@@ -154,9 +198,9 @@ class Agent:
 
                 # If we're out of retries or it's a different error, return the error message
                 if attempt == max_retries - 1:
-                    return f"[ERROR: {self.name} failed to respond - {error_str}]"
+                    return AgentResult.failure(f"{self.name} failed to respond - {error_str}")
 
-        return f"[ERROR: {self.name} failed to respond]"
+        return AgentResult.failure(f"{self.name} failed to respond")
 
     @staticmethod
     def _extract_json_field(raw: str, key: str) -> Optional[str]:

@@ -7,12 +7,12 @@ a shared "Center Table" to create unforgettably potent stories.
 """
 
 import argparse
-import json
 import os
 import sys
 from typing import Any
-from urllib import error as urllib_error
 from urllib import request as urllib_request
+
+from dotenv import load_dotenv
 
 try:
     from colorama import init, Fore, Style
@@ -34,6 +34,7 @@ except ImportError:  # pragma: no cover - exercised in thin local installs
     Fore = _ColorFallback()
     Style = _ColorFallback()
 
+from lib.config import ConfigError, build_runtime_config, validate_openrouter_api_key
 from lib.pipeline import (
     generate_pipeline_report_from_draft,
     get_pipeline_failures,
@@ -45,6 +46,7 @@ from lib.story_state import StoryAct
 
 # Initialize colorama for cross-platform colored terminal output
 init(autoreset=True)
+load_dotenv()
 
 CLI_COLOR_BY_HEX = {
     "#00FFFF": Fore.CYAN,
@@ -262,52 +264,10 @@ def _handle_pipeline_cli_result(pipeline_dir: str, *, action_label: str) -> None
 def validate_api_key():
     """Validate that the OpenRouter API key works."""
     api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        return False, "OPENROUTER_API_KEY not found in environment"
-
-    if not api_key.startswith("sk-or-"):
-        return False, "API key format appears invalid (should start with 'sk-or-')"
-
-    request = urllib_request.Request(
-        "https://openrouter.ai/api/v1/key",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Accept": "application/json",
-        },
-        method="GET",
+    return validate_openrouter_api_key(
+        api_key or "",
+        urlopen=urllib_request.urlopen,
     )
-
-    try:
-        with urllib_request.urlopen(request, timeout=10) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib_error.HTTPError as exc:
-        if exc.code == 401:
-            return False, "API key is invalid or expired"
-        if exc.code == 429:
-            return False, "Rate limited - your API key may need credits"
-        if exc.code == 404:
-            return False, "OpenRouter key endpoint was not found"
-        return False, f"OpenRouter validation failed ({exc.code})"
-    except urllib_error.URLError as exc:
-        reason = str(exc.reason)
-        if "timed out" in reason.lower():
-            return False, "Connection timeout - check your internet connection"
-        return False, f"Network error - {reason}"
-    except Exception as exc:
-        return False, f"Validation failed: {str(exc)[:150]}"
-
-    data = payload.get("data", {})
-    if not data:
-        return False, "Unexpected API response format"
-
-    limit_remaining = data.get("limit_remaining")
-    try:
-        if limit_remaining is not None and float(limit_remaining) <= 0:
-            return True, "Warning: API key is valid, but the current account limit is exhausted."
-    except (TypeError, ValueError):
-        pass
-
-    return True, "API key validated successfully"
 
 
 def select_story_mode() -> str:
@@ -463,26 +423,29 @@ def main():
 
     if not args.skip_validation:
         print(f"{Fore.CYAN}Validating API key...")
-        is_valid, message = validate_api_key()
-        if not is_valid:
-            print(f"{Fore.RED}ERROR: {message}")
-            print(f"{Fore.YELLOW}Please check your .env file and ensure OPENROUTER_API_KEY is set.")
-            print(f"{Fore.YELLOW}See .env.example for reference.")
-            sys.exit(1)
-        if "Warning" in message:
-            print(f"{Fore.YELLOW}Warning: {message}")
+
+    try:
+        runtime_config, validation_message = build_runtime_config(
+            validate_api_key=not args.skip_validation,
+            urlopen=urllib_request.urlopen,
+        )
+    except ConfigError as exc:
+        print(f"{Fore.RED}ERROR: {exc}")
+        print(f"{Fore.YELLOW}Please check your .env file and ensure OPENROUTER_API_KEY is set.")
+        print(f"{Fore.YELLOW}See .env.example for reference.")
+        sys.exit(1)
+
+    if not args.skip_validation:
+        if "Warning" in validation_message:
+            print(f"{Fore.YELLOW}{validation_message}")
         else:
-            print(f"{Fore.GREEN}OK: {message}")
-    else:
-        if not os.getenv("OPENROUTER_API_KEY"):
-            print(f"{Fore.RED}ERROR: OPENROUTER_API_KEY not found in environment.")
-            print(f"{Fore.YELLOW}Please create a .env file with your OpenRouter API key.")
-            sys.exit(1)
+            print(f"{Fore.GREEN}OK: {validation_message}")
 
     if args.run_pipeline:
         pipeline_dir = generate_pipeline_report_from_draft(
             draft_path=args.run_pipeline,
             model=args.model or DEFAULT_MODEL,
+            runtime_config=runtime_config,
         )
         _handle_pipeline_cli_result(
             pipeline_dir,
@@ -494,6 +457,7 @@ def main():
         pipeline_dir = retry_failed_pipeline_items(
             draft_path=args.retry_pipeline,
             model=args.model or DEFAULT_MODEL,
+            runtime_config=runtime_config,
         )
         _handle_pipeline_cli_result(
             pipeline_dir,
@@ -520,7 +484,7 @@ def main():
     print(f"{Fore.CYAN}{'─' * 60}\n")
 
     sink = CliSessionSink()
-    orchestrator = SessionOrchestrator(sink)
+    orchestrator = SessionOrchestrator(sink, runtime_config=runtime_config)
     config = _build_cli_config(
         args=args,
         prompt=user_prompt,

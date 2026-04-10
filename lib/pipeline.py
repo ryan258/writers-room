@@ -32,12 +32,13 @@ import logging
 from pathlib import Path
 from typing import Any, Iterable
 
-from .agents import Agent
+from .agents import Agent, coerce_agent_result
 from .artifacts import (
     DEFAULT_PIPELINES_DIR,
     derive_pipeline_dirname_from_final_path,
     extract_markdown_title,
 )
+from .config import RuntimeConfig
 from .personalities import DEFAULT_MODEL
 
 
@@ -350,6 +351,7 @@ def generate_status_data(
     *,
     draft_markdown: str,
     model: str = DEFAULT_MODEL,
+    runtime_config: RuntimeConfig | None = None,
 ) -> dict[str, list[dict[str, str]]]:
     """Generate structured editing + polish status from a final draft."""
     if not draft_markdown.strip():
@@ -365,10 +367,20 @@ def generate_status_data(
         max_tokens=2500,
         window_size=1,
         response_format={"type": "json_object"},
+        runtime_config=runtime_config,
     )
-    raw_response = agent.generate_response(
-        [{"role": "user", "content": build_status_task(draft_markdown)}]
+    result = coerce_agent_result(
+        agent.generate_response(
+            [{"role": "user", "content": build_status_task(draft_markdown)}]
+        )
     )
+    if not result.ok:
+        raise ValueError(f"Pipeline editor failed: {result.error}")
+
+    raw_response = result.content.strip()
+    if not raw_response:
+        raise ValueError("Pipeline editor returned empty content.")
+
     try:
         parsed = json.loads(raw_response)
     except (TypeError, json.JSONDecodeError) as exc:
@@ -436,6 +448,7 @@ def generate_marketing_asset(
     spec: MarketingAssetSpec,
     draft_markdown: str,
     model: str = DEFAULT_MODEL,
+    runtime_config: RuntimeConfig | None = None,
 ) -> str:
     """Generate copy for a single marketing asset. Returns raw Markdown body."""
     if not draft_markdown.strip():
@@ -448,14 +461,21 @@ def generate_marketing_asset(
         temperature=0.6,
         max_tokens=spec.max_tokens,
         window_size=1,
+        runtime_config=runtime_config,
     )
     user_message = (
         f"{spec.instructions}\n\nDraft:\n{draft_markdown}"
     )
-    raw = agent.generate_response([{"role": "user", "content": user_message}])
-    if not raw or not raw.strip():
+    result = coerce_agent_result(
+        agent.generate_response([{"role": "user", "content": user_message}])
+    )
+    if not result.ok:
+        raise ValueError(f"Marketing asset '{spec.slug}' failed: {result.error}")
+
+    raw = result.content.strip()
+    if not raw:
         raise ValueError(f"Marketing asset '{spec.slug}' returned empty copy.")
-    return raw.strip()
+    return raw
 
 
 def render_marketing_asset_file(spec: MarketingAssetSpec, body: str) -> str:
@@ -601,6 +621,7 @@ def _run_marketing_batch(
     draft_markdown: str,
     model: str,
     pipeline_dir: Path,
+    runtime_config: RuntimeConfig | None,
 ) -> dict[str, dict[str, Any]]:
     """Run marketing asset calls in batches of MARKETING_BATCH_SIZE."""
     marketing_dir = pipeline_dir / "marketing"
@@ -617,6 +638,7 @@ def _run_marketing_batch(
                 spec=spec,
                 draft_markdown=draft_markdown,
                 model=model,
+                runtime_config=runtime_config,
             ): spec
             for spec in specs
         }
@@ -641,6 +663,7 @@ def generate_pipeline_report_from_draft(
     pipelines_root: str | Path = DEFAULT_PIPELINES_DIR,
     only_slugs: Iterable[str] | None = None,
     include_status: bool = True,
+    runtime_config: RuntimeConfig | None = None,
 ) -> str:
     """Read a final draft, generate the pipeline directory, and return its path.
 
@@ -678,7 +701,9 @@ def generate_pipeline_report_from_draft(
     if include_status:
         try:
             status_data = generate_status_data(
-                draft_markdown=draft_markdown, model=model
+                draft_markdown=draft_markdown,
+                model=model,
+                runtime_config=runtime_config,
             )
             status_markdown = render_status_markdown(
                 title=title, draft_path=draft_file, status_data=status_data
@@ -710,6 +735,7 @@ def generate_pipeline_report_from_draft(
         draft_markdown=draft_markdown,
         model=model,
         pipeline_dir=pipeline_dir,
+        runtime_config=runtime_config,
     )
 
     # Merge with any pre-existing assets on disk so index.md and the failures
@@ -761,6 +787,7 @@ def retry_failed_pipeline_items(
     model: str = DEFAULT_MODEL,
     output_dir: str | Path | None = None,
     pipelines_root: str | Path = DEFAULT_PIPELINES_DIR,
+    runtime_config: RuntimeConfig | None = None,
 ) -> str:
     """Retry only items listed in ``.failures.json`` for this draft.
 
@@ -796,4 +823,5 @@ def retry_failed_pipeline_items(
         pipelines_root=pipelines_root,
         only_slugs=marketing_failed,
         include_status=status_failed,
+        runtime_config=runtime_config,
     )

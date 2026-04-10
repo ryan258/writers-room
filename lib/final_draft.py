@@ -13,7 +13,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional
 
-from .agents import Agent
+from .agents import Agent, coerce_agent_result
+from .config import RuntimeConfig
 from .personalities import (
     DEFAULT_MODEL,
     EDITOR_LINE,
@@ -70,6 +71,7 @@ def generate_final_draft(
     conversation_history: List[Dict[str, Any]],
     story_state: Any,
     emit: Callable[[str, Dict[str, Any]], None],
+    runtime_config: Optional[RuntimeConfig] = None,
 ) -> Optional[str]:
     """Run two Editor passes over the session transcript and return Markdown.
 
@@ -97,6 +99,7 @@ def generate_final_draft(
             temperature=0.6,
             max_tokens=6000,
             window_size=1,
+            runtime_config=runtime_config,
         )
         structural_task = build_final_draft_task(
             mode=mode,
@@ -105,14 +108,24 @@ def generate_final_draft(
             transcript=transcript,
             stage="structural",
         )
-        structural_raw = structural_agent.generate_response(
-            [{"role": "user", "content": structural_task}]
+        structural_result = coerce_agent_result(
+            structural_agent.generate_response(
+                [{"role": "user", "content": structural_task}]
+            )
         )
     except Exception as exc:  # pragma: no cover - defensive
         emit("error", {"message": f"Structural editor failed: {exc}"})
         return None
 
-    if not structural_raw or structural_raw.startswith("[ERROR"):
+    if not structural_result.ok:
+        emit(
+            "error",
+            {"message": f"Structural editor failed: {structural_result.error}"},
+        )
+        return None
+
+    structural_raw = structural_result.content.strip()
+    if not structural_raw:
         emit(
             "error",
             {"message": f"Structural editor returned no draft: {structural_raw}"},
@@ -142,6 +155,7 @@ def generate_final_draft(
             temperature=0.5,
             max_tokens=6000,
             window_size=1,
+            runtime_config=runtime_config,
         )
         line_task = build_final_draft_task(
             mode=mode,
@@ -151,14 +165,21 @@ def generate_final_draft(
             stage="line",
             previous=structural_draft,
         )
-        line_raw = line_agent.generate_response(
-            [{"role": "user", "content": line_task}]
+        line_result = coerce_agent_result(
+            line_agent.generate_response(
+                [{"role": "user", "content": line_task}]
+            )
         )
     except Exception as exc:  # pragma: no cover - defensive
         emit("error", {"message": f"Line editor failed: {exc}"})
         return None
 
-    if not line_raw or line_raw.startswith("[ERROR"):
+    if not line_result.ok:
+        emit("error", {"message": f"Line editor failed: {line_result.error}"})
+        return None
+
+    line_raw = line_result.content.strip()
+    if not line_raw:
         emit(
             "error",
             {"message": f"Line editor returned no draft: {line_raw}"},
