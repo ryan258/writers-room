@@ -228,7 +228,6 @@ def build_dnd_story_context(
 ) -> str:
     """Build the concise D&D context block used by the DM/player turns."""
     state = story_manager.get_state()
-    active_threads = state.get_active_threads()
     clean_history = build_clean_dnd_history(conversation_history)
     recent_turns = []
     for msg in clean_history:
@@ -246,12 +245,9 @@ def build_dnd_story_context(
         f"Round: {round_num}",
         f"Act: {state.current_act.name}",
         f"Tension: {state.tension_level}/10",
+        f"Words So Far: {state.word_count}",
+        "Immediate Pressure: Introduce or escalate one concrete problem, mystery, or threat.",
     ]
-
-    if active_threads:
-        lines.append(f"Active Pressure: {clean_single_line(active_threads[0].description)}")
-    else:
-        lines.append("Active Pressure: The table needs one concrete problem, mystery, or threat.")
 
     if recent_turns:
         lines.append("Recent Table Talk:")

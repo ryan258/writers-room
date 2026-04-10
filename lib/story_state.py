@@ -1,70 +1,25 @@
 """
-Story State: The Center Table Architecture
-
-This module implements the collaborative story state system where all agents
-work together around a shared "Center Table" to create cohesive narratives.
+Story state tracking for the runtime fields that actually shape sessions.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
 from enum import Enum
 
 
 class StoryAct(Enum):
     """Three-act structure for story pacing."""
-    SETUP = 1           # Establish characters, setting, and initial conflict
-    CONFRONTATION = 2   # Rising action, complications, and tension
-    RESOLUTION = 3      # Climax and denouement
-
-
-@dataclass
-class Character:
-    """A character in the story with their arc and current state."""
-    name: str
-    role: str  # protagonist, antagonist, supporting, etc.
-    motivation: str = ""
-    arc_stage: str = "introduced"  # introduced, developing, transformed
-    last_action: str = ""
-    emotional_state: str = ""
-
-    def to_dict(self) -> dict:
-        return {
-            "name": self.name,
-            "role": self.role,
-            "motivation": self.motivation,
-            "arc_stage": self.arc_stage,
-            "last_action": self.last_action,
-            "emotional_state": self.emotional_state
-        }
-
-
-@dataclass
-class PlotThread:
-    """A narrative thread being developed in the story."""
-    id: str
-    description: str
-    tension_level: int = 5  # 1-10 scale
-    status: str = "active"  # active, resolved, abandoned
-    introduced_by: str = ""
-
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "description": self.description,
-            "tension_level": self.tension_level,
-            "status": self.status,
-            "introduced_by": self.introduced_by
-        }
+    SETUP = 1
+    CONFRONTATION = 2
+    RESOLUTION = 3
 
 
 @dataclass
 class StorySegment:
-    """A contribution to the story with metadata."""
+    """A contribution to the story with lightweight metadata."""
     content: str
     author: str
     round_num: int
     word_count: int = 0
-    advances_plot: bool = True
 
     def __post_init__(self):
         self.word_count = len(self.content.split())
@@ -75,34 +30,24 @@ class StorySegment:
             "author": self.author,
             "round_num": self.round_num,
             "word_count": self.word_count,
-            "advances_plot": self.advances_plot
         }
 
 
 @dataclass
 class StoryState:
     """
-    The Center Table: shared story state that all agents can see and build upon.
+    Shared runtime story state for pacing and recent context.
 
-    This is the heart of the collaborative system - instead of agents competing
-    with their own styles, they all focus on what the story NEEDS next.
+    The session currently tracks only the fields that are produced in runtime:
+    premise, act, tension, pacing, word count, round count, and recent beats.
     """
+
     premise: str
-    mode: str = "horror"  # horror, noir, comedy, sci-fi, literary, fantasy, dnd
+    mode: str = "horror"
     current_act: StoryAct = StoryAct.SETUP
-
-    # Story elements
-    characters: dict = field(default_factory=dict)  # name -> Character
-    plot_threads: list = field(default_factory=list)  # List of PlotThread
-    themes: list = field(default_factory=list)  # Concepts being developed
-
-    # Scene tracking
-    scene_beats: list = field(default_factory=list)  # What's happened in current scene
-    story_segments: list = field(default_factory=list)  # All contributions
-
-    # Story health metrics
-    tension_level: int = 3  # Overall tension 1-10
-    pacing: str = "steady"  # slow, steady, fast, frantic
+    story_segments: list = field(default_factory=list)
+    tension_level: int = 3
+    pacing: str = "steady"
     word_count: int = 0
     round_count: int = 0
 
@@ -112,32 +57,6 @@ class StoryState:
         self.story_segments.append(segment)
         self.word_count += segment.word_count
         self.round_count = max(self.round_count, round_num)
-
-    def add_character(self, name: str, role: str, motivation: str = ""):
-        """Add or update a character."""
-        if name not in self.characters:
-            self.characters[name] = Character(name=name, role=role, motivation=motivation)
-        else:
-            char = self.characters[name]
-            if motivation:
-                char.motivation = motivation
-
-    def add_plot_thread(self, thread_id: str, description: str, author: str, tension: int = 5):
-        """Add a new plot thread."""
-        thread = PlotThread(
-            id=thread_id,
-            description=description,
-            tension_level=tension,
-            introduced_by=author
-        )
-        self.plot_threads.append(thread)
-
-    def resolve_plot_thread(self, thread_id: str):
-        """Mark a plot thread as resolved."""
-        for thread in self.plot_threads:
-            if thread.id == thread_id:
-                thread.status = "resolved"
-                break
 
     def update_tension(self, delta: int):
         """Adjust overall tension level."""
@@ -150,94 +69,43 @@ class StoryState:
         elif self.current_act == StoryAct.CONFRONTATION:
             self.current_act = StoryAct.RESOLUTION
 
-    def get_active_threads(self) -> list:
-        """Get all active plot threads."""
-        return [t for t in self.plot_threads if t.status == "active"]
-
     def get_story_needs(self) -> list:
-        """Analyze what the story currently needs."""
-        needs = []
-
-        # Check character needs
-        if not self.characters:
-            needs.append("Introduce a compelling character")
-        elif len(self.characters) == 1:
-            needs.append("Add another character for conflict/interaction")
-
-        # Check plot thread needs
-        active_threads = self.get_active_threads()
-        if not active_threads:
-            needs.append("Establish a central conflict or mystery")
-        elif len(active_threads) > 3:
-            needs.append("Resolve or combine some plot threads")
-
-        # Check pacing needs based on act
+        """Return a small set of honest pacing and escalation nudges."""
         if self.current_act == StoryAct.SETUP:
-            if self.round_count > 2 and self.tension_level < 4:
-                needs.append("Raise the stakes - something needs to go wrong")
-        elif self.current_act == StoryAct.CONFRONTATION:
+            if self.round_count <= 1:
+                return ["Establish a concrete source of conflict or unease"]
+            if self.tension_level < 4:
+                return ["Raise the stakes before the setup stalls"]
+            return ["Turn the setup into a concrete complication"]
+
+        if self.current_act == StoryAct.CONFRONTATION:
             if self.tension_level < 6:
-                needs.append("Increase tension and complications")
-            elif self.tension_level > 8:
-                needs.append("Brief moment of relief before next escalation")
-        elif self.current_act == StoryAct.RESOLUTION:
-            if active_threads:
-                needs.append(f"Resolve: {active_threads[0].description}")
+                return ["Increase tension and complications"]
+            if self.tension_level > 8:
+                return ["Give the story one brief breath before the next escalation"]
+            return ["Drive the confrontation toward a decisive turn"]
 
-        # Check for stagnation
-        if len(self.story_segments) > 3:
-            recent = self.story_segments[-3:]
-            recent_authors = [s.author for s in recent]
-            if len(set(recent_authors)) < len(recent_authors):
-                needs.append("Fresh perspective needed")
-
-        return needs if needs else ["Continue building momentum"]
+        return ["Drive toward a decisive ending"]
 
     def to_prompt_context(self) -> str:
         """Generate a prompt-friendly summary for agents."""
-        lines = []
-        lines.append("=== THE CENTER TABLE: STORY STATE ===")
-        lines.append(f"Premise: {self.premise}")
-        lines.append(f"Mode: {self.mode.upper()}")
-        lines.append(f"Act: {self.current_act.name} ({self.current_act.value}/3)")
-        lines.append(f"Tension: {self.tension_level}/10 | Pacing: {self.pacing}")
-        lines.append("")
+        lines = [
+            "=== THE CENTER TABLE: STORY STATE ===",
+            f"Premise: {self.premise}",
+            f"Mode: {self.mode.upper()}",
+            f"Act: {self.current_act.name} ({self.current_act.value}/3)",
+            f"Tension: {self.tension_level}/10 | Pacing: {self.pacing}",
+            f"Rounds: {self.round_count} | Words: {self.word_count}",
+            "",
+        ]
 
-        # Characters
-        if self.characters:
-            lines.append("CHARACTERS:")
-            for name, char in self.characters.items():
-                lines.append(f"  - {name} ({char.role}): {char.motivation or 'motivation unknown'}")
-                if char.last_action:
-                    lines.append(f"    Last: {char.last_action}")
-
-        # Active plot threads
-        active = self.get_active_threads()
-        if active:
-            lines.append("")
-            lines.append("ACTIVE THREADS:")
-            for thread in active[:3]:  # Limit to top 3
-                lines.append(f"  - {thread.description} [tension: {thread.tension_level}]")
-
-        # Themes
-        if self.themes:
-            lines.append("")
-            lines.append(f"THEMES: {', '.join(self.themes[:3])}")
-
-        # Recent story (last 3 segments)
         if self.story_segments:
-            lines.append("")
             lines.append("RECENT STORY:")
             for segment in self.story_segments[-3:]:
                 lines.append(f"  [{segment.author}]: {segment.content[:100]}...")
+            lines.append("")
 
-        # What the story needs
-        needs = self.get_story_needs()
-        lines.append("")
-        lines.append("STORY NEEDS:")
-        for need in needs[:2]:  # Top 2 needs
-            lines.append(f"  >> {need}")
-
+        lines.append(f"CURRENT FOCUS: {self.get_story_needs()[0]}")
         lines.append("=" * 40)
         return "\n".join(lines)
 
@@ -247,53 +115,40 @@ class StoryState:
             "premise": self.premise,
             "mode": self.mode,
             "current_act": self.current_act.value,
-            "characters": {k: v.to_dict() for k, v in self.characters.items()},
-            "plot_threads": [t.to_dict() for t in self.plot_threads],
-            "themes": self.themes,
-            "scene_beats": self.scene_beats,
-            "story_segments": [s.to_dict() for s in self.story_segments],
+            "story_segments": [segment.to_dict() for segment in self.story_segments],
             "tension_level": self.tension_level,
             "pacing": self.pacing,
             "word_count": self.word_count,
-            "round_count": self.round_count
+            "round_count": self.round_count,
         }
 
 
 class StoryStateManager:
     """
-    Manages story state updates and generates agent-specific guidance.
+    Manage runtime story state updates and guidance.
 
-    This class processes contributions, extracts story elements,
-    and provides tailored guidance to each agent based on their specialty.
+    This manager tracks pacing-oriented signals and recent beats rather than
+    speculative character or plot-thread structures.
     """
 
     def __init__(self, premise: str, mode: str = "horror"):
         self.state = StoryState(premise=premise, mode=mode)
 
     def process_contribution(self, content: str, author: str, round_num: int):
-        """
-        Process an agent's contribution and update story state.
-
-        This is where we extract characters, plot developments, and
-        other story elements from the contribution.
-        """
+        """Process an agent contribution and update story state."""
         self.state.add_segment(content, author, round_num)
 
         content_lower = content.lower()
 
-        # --- Tension tracking -------------------------------------------------
         high_tension = [
-            # Horror / dread
             "scream", "blood", "terror", "horror", "panic", "death", "kill",
             "dark", "shadow", "threat", "danger", "fear", "dread", "howl",
             "shatter", "crash", "explode", "collapse", "trap", "curse",
             "devour", "sacrifice", "ritual", "corrupted", "infernal",
-            # Combat / action (D&D-relevant)
             "attack", "strike", "sword", "blade", "spell", "wound", "ambush",
             "charge", "flee", "combat", "battle", "fight", "slash", "stab",
             "damage", "hit", "initiative", "weapon", "arrow", "bolt",
             "grapple", "shove", "smite", "rage", "sneak",
-            # Urgency / stakes
             "hurry", "urgent", "countdown", "closing", "sealing",
             "grinding", "stalking", "cornered", "surrounded", "locked",
             "poison", "dying", "unconscious", "failed",
@@ -312,21 +167,17 @@ class StoryStateManager:
             if word in content_lower:
                 delta -= 1
 
-        # Clamp per-contribution swing but allow multi-keyword hits
         delta = max(-2, min(3, delta))
         if delta:
             self.state.update_tension(delta)
 
-        # Natural escalation: tension should trend upward as the session runs.
-        # If below a round-proportional floor, nudge toward it.
         round_floor = min(8, 2 + round_num)
         if self.state.tension_level < round_floor:
             self.state.update_tension(1)
 
-        # --- Pacing -----------------------------------------------------------
-        sentences = max(1, content.count('.') + content.count('!') + content.count('?'))
+        sentences = max(1, content.count(".") + content.count("!") + content.count("?"))
         avg_sentence_len = len(content.split()) / sentences
-        exclamations = content.count('!')
+        exclamations = content.count("!")
         if avg_sentence_len < 8 or exclamations >= 2:
             self.state.pacing = "fast"
         elif avg_sentence_len > 20:
@@ -334,7 +185,6 @@ class StoryStateManager:
         else:
             self.state.pacing = "steady"
 
-        # --- Act transitions --------------------------------------------------
         if self.state.current_act == StoryAct.SETUP and self.state.round_count >= 2:
             if self.state.tension_level >= 4:
                 self.state.advance_act()
@@ -343,10 +193,7 @@ class StoryStateManager:
                 self.state.advance_act()
 
     def get_agent_guidance(self, agent_specialty: str) -> str:
-        """
-        Generate specific guidance for an agent based on their specialty
-        and what the story currently needs.
-        """
+        """Generate specific guidance for an agent based on current pacing needs."""
         needs = self.state.get_story_needs()
         mode_context = self._get_mode_guidance()
 
@@ -354,7 +201,7 @@ class StoryStateManager:
             f"Story Mode: {self.state.mode.upper()}",
             mode_context,
             "",
-            "What the story needs now:"
+            "What the story needs now:",
         ]
 
         for need in needs[:2]:
@@ -388,8 +235,6 @@ Act: {self.state.current_act.name}
 Tension: {self.state.tension_level}/10
 Pacing: {self.state.pacing}
 Word Count: {self.state.word_count}
-Active Plot Threads: {len(self.state.get_active_threads())}
-Characters Established: {len(self.state.characters)}
 
 Evaluation Focus for {self.state.mode} mode:
 - Did the contribution serve the story's needs?
@@ -407,8 +252,3 @@ Evaluation Focus for {self.state.mode} mode:
         valid_modes = ["horror", "noir", "comedy", "sci-fi", "literary", "fantasy", "dnd"]
         if mode.lower() in valid_modes:
             self.state.mode = mode.lower()
-
-    def add_theme(self, theme: str):
-        """Add a theme being explored."""
-        if theme not in self.state.themes:
-            self.state.themes.append(theme)

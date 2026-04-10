@@ -519,17 +519,13 @@ function updateStoryStatePanel(state) {
     state.pacing || "steady";
   document.getElementById("state-words").textContent = state.word_count || 0;
 
+  const needsRow = document.getElementById("state-needs-row");
   const needsLabel = document.getElementById("state-needs-label");
   const needsValue = document.getElementById("state-needs");
   if (state.mode === "dnd") {
-    needsLabel.textContent = "Active pressure";
-    const activeThread =
-      Array.isArray(state.plot_threads) &&
-      state.plot_threads.find((thread) => thread.status === "active");
-    needsValue.textContent = activeThread
-      ? activeThread.description
-      : "The table is still establishing the next hard problem.";
+    needsRow.classList.add("hidden");
   } else {
+    needsRow.classList.remove("hidden");
     needsLabel.textContent = "Story need";
     const needs =
       Array.isArray(state.story_needs) && state.story_needs.length

@@ -44,16 +44,15 @@ def render_session_brief(
 
     safe_prompt = _clean_text(prompt) or "Untitled Session"
     latest_messages = _latest_contributions(conversation_history)
-    active_threads = list(story_state.get_active_threads()) if story_state else []
     story_needs = list(story_state.get_story_needs()) if story_state else []
     mode_info = STORY_MODES.get(mode, {})
     document_label = "Campaign Debrief" if is_dnd_mode(mode) else "Session Debrief"
     mode_name = mode_info.get("name", mode.upper())
     primary_need = _select_primary_need(mode, story_needs)
 
-    headline = _build_headline(mode_name, story_state, active_threads)
-    insight = _build_governing_insight(mode_name, story_state, active_threads, leaderboard)
-    recommendations = _build_recommendations(mode, primary_need, active_threads, leaderboard)
+    headline = _build_headline(mode_name, story_state)
+    insight = _build_governing_insight(mode_name, story_state, leaderboard)
+    recommendations = _build_recommendations(mode, primary_need, leaderboard)
 
     brief = ExecutiveBrief(
         brief_id=_slugify(f"{mode}-{safe_prompt}")[:64],
@@ -71,12 +70,11 @@ def render_session_brief(
             mode_name=mode_name,
             story_state=story_state,
             primary_need=primary_need,
-            active_threads=active_threads,
             latest_messages=latest_messages,
         ),
-        top_metrics=_build_metrics(mode, story_state, conversation_history, leaderboard, active_threads),
-        key_findings=_build_findings(latest_messages, active_threads, leaderboard),
-        decision_implications=_build_implications(primary_need, active_threads, leaderboard),
+        top_metrics=_build_metrics(mode, story_state, conversation_history, leaderboard),
+        key_findings=_build_findings(latest_messages, leaderboard),
+        decision_implications=_build_implications(primary_need, leaderboard),
         recommendations=recommendations,
         methodology=[
             "Brief generated from the shared story state and the final session transcript.",
@@ -121,7 +119,6 @@ def _render_minimal_session_brief(
     """Fallback HTML brief when the optional executive_reporting package is unavailable."""
     safe_prompt = _clean_text(prompt) or "Untitled Session"
     all_contributions = _latest_contributions(conversation_history, limit=0)
-    active_threads = list(story_state.get_active_threads()) if story_state else []
     story_needs = list(story_state.get_story_needs()) if story_state else []
     mode_info = STORY_MODES.get(mode, {})
     dnd = is_dnd_mode(mode)
@@ -133,7 +130,6 @@ def _render_minimal_session_brief(
         mode_name=mode_name,
         story_state=story_state,
         primary_need=primary_need,
-        active_threads=active_threads,
         latest_messages=all_contributions,
     )
 
@@ -162,11 +158,11 @@ def _render_minimal_session_brief(
             + leaderboard_html
         )
 
-    # --- Open Threads ---
-    thread_items = "".join(
-        f"<li>{html.escape(_clean_text(thread.description))}</li>"
-        for thread in active_threads
-    ) or "<li>No active threads remained.</li>"
+    focus_items = (
+        f"<li>{html.escape(_clean_text(primary_need))}</li>"
+        if primary_need
+        else "<li>No additional story guidance was tracked.</li>"
+    )
 
     transcript_line = (
         f"<p class=\"transcript-link\">Full transcript: <code>{html.escape(transcript_path)}</code></p>"
@@ -234,8 +230,8 @@ def _render_minimal_session_brief(
       {encounter_html}
     </section>
     <section>
-      <h2>Open Threads</h2>
-      <ul>{thread_items}</ul>
+      <h2>Story Focus</h2>
+      <ul>{focus_items}</ul>
     </section>
     <section>
       <h2>Leaderboard</h2>
@@ -253,22 +249,17 @@ def _render_minimal_session_brief(
     target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_text(html_output, encoding="utf-8")
     return str(target_path)
+
+
 def _build_governing_question(mode: str) -> str:
     if is_dnd_mode(mode):
         return "What changed at the table, what pressure remains, and what should the party answer next?"
     return "What did the session establish, and where should the next pass concentrate?"
 
 
-def _build_headline(mode_name: str, story_state: Any, active_threads: list[Any]) -> str:
+def _build_headline(mode_name: str, story_state: Any) -> str:
     if not story_state:
         return f"{mode_name} session recap"
-
-    if active_threads:
-        thread = _clean_text(active_threads[0].description)
-        return (
-            f"{mode_name} session ended in {story_state.current_act.name.lower()} "
-            f"with {thread.lower()} still unresolved."
-        )
 
     return (
         f"{mode_name} session reached {story_state.current_act.name.lower()} "
@@ -279,18 +270,12 @@ def _build_headline(mode_name: str, story_state: Any, active_threads: list[Any])
 def _build_governing_insight(
     mode_name: str,
     story_state: Any,
-    active_threads: list[Any],
     leaderboard: list[dict[str, Any]],
 ) -> str:
     if not story_state:
         return f"{mode_name} session completed without enough shared state to produce a sharper recap."
 
     winner = leaderboard[0]["name"] if leaderboard else "the table"
-    if active_threads:
-        return (
-            f"The session pushed {winner} toward the center of the action while leaving "
-            f"{_clean_text(active_threads[0].description).lower()} as the next decisive pressure point."
-        )
     return (
         f"The table advanced the scenario into {story_state.current_act.name.lower()} "
         f"with {winner} setting the clearest momentum."
@@ -303,7 +288,6 @@ def _build_summary(
     mode_name: str,
     story_state: Any,
     primary_need: str,
-    active_threads: list[Any],
     latest_messages: list[dict[str, str]],
 ) -> list[str]:
     if not story_state:
@@ -326,11 +310,7 @@ def _build_summary(
             f"Most recent beat: {_clean_text(latest_messages[-1]['content'])}"
         )
 
-    if active_threads:
-        summary.append(
-            f"Open pressure remains around {_clean_text(active_threads[0].description).lower()}."
-        )
-    elif primary_need:
+    if primary_need:
         summary.append(f"Next pressure point: {_clean_text(primary_need)}.")
 
     return summary[:3]
@@ -341,7 +321,6 @@ def _build_metrics(
     story_state: Any,
     conversation_history: list[dict[str, Any]],
     leaderboard: list[dict[str, Any]],
-    active_threads: list[Any],
 ) -> list[Any]:
     from executive_reporting import EvidenceMetric
 
@@ -358,15 +337,6 @@ def _build_metrics(
         ),
     ]
 
-    if active_threads:
-        metrics.append(
-            EvidenceMetric(
-                label="Active Threads",
-                value=str(len(active_threads)),
-                source="Story state",
-            )
-        )
-
     if leaderboard:
         winner = leaderboard[0]
         metrics.append(
@@ -382,7 +352,6 @@ def _build_metrics(
 
 def _build_findings(
     latest_messages: list[dict[str, str]],
-    active_threads: list[Any],
     leaderboard: list[dict[str, Any]],
 ) -> list[Any]:
     from executive_reporting import BriefFinding
@@ -404,20 +373,6 @@ def _build_findings(
             )
         )
 
-    if active_threads:
-        findings.append(
-            BriefFinding(
-                title="Primary Open Thread",
-                claim=_clean_text(active_threads[0].description),
-                evidence_points=[
-                    f"Tension: {thread.tension_level}/10 | Status: {thread.status}"
-                    for thread in active_threads[:2]
-                ],
-                implication="The unresolved thread should anchor the next round or next session.",
-                confidence="medium",
-            )
-        )
-
     if leaderboard:
         winner = leaderboard[0]
         findings.append(
@@ -435,17 +390,12 @@ def _build_findings(
 
 def _build_implications(
     primary_need: str,
-    active_threads: list[Any],
     leaderboard: list[dict[str, Any]],
 ) -> list[str]:
     implications: list[str] = []
 
     if primary_need:
         implications.append(_clean_text(primary_need))
-    if active_threads:
-        implications.append(
-            f"Resolve or escalate {_clean_text(active_threads[0].description).lower()} before opening new threads."
-        )
     if leaderboard:
         implications.append(
             f"Use {leaderboard[0]['name']}'s momentum as the cleanest handoff into the next beat."
@@ -460,7 +410,6 @@ def _build_implications(
 def _build_recommendations(
     mode: str,
     primary_need: str,
-    active_threads: list[Any],
     leaderboard: list[dict[str, Any]],
 ) -> list[Any]:
     from executive_reporting import BriefRecommendation
@@ -505,16 +454,6 @@ def _build_recommendations(
                 timeline="Next round",
                 expected_impact="Addresses the clearest gap identified by the shared story state.",
                 key_risk="Ignoring the current need will make the scene feel repetitive.",
-            )
-        )
-    elif active_threads:
-        recommendations.append(
-            BriefRecommendation(
-                action=f"Pressure {_clean_text(active_threads[0].description).lower()} until it either resolves or mutates.",
-                owner="Next speaker",
-                timeline="Next round",
-                expected_impact="Gives the session a strong continuation point.",
-                key_risk="Introducing a new thread too early will diffuse tension.",
             )
         )
 

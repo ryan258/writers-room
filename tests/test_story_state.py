@@ -15,17 +15,22 @@ def test_story_state_manager_updates_tension_pacing_and_act():
     assert manager.get_state().round_count == 3
 
 
-def test_story_state_tracks_needs_threads_and_resolution():
+def test_story_state_context_and_payload_match_runtime_shape():
     state = StoryState(premise="A town forgets its own mayor.")
 
-    assert "Introduce a compelling character" in state.get_story_needs()
+    assert state.get_story_needs() == ["Establish a concrete source of conflict or unease"]
 
-    state.add_character("Mara", "protagonist", "Find the missing records")
-    state.add_plot_thread("records", "The missing archive ledgers", "Rod Serling", tension=7)
+    state.add_segment("The square bells ring with no one pulling the ropes.", "Rod Serling", 1)
+    state.add_segment("The mayor's portrait has been painted over with an empty chair.", "Stephen King", 2)
 
-    active_threads = state.get_active_threads()
-    assert len(active_threads) == 1
-    assert active_threads[0].description == "The missing archive ledgers"
+    context = state.to_prompt_context()
+    payload = state.to_dict()
 
-    state.resolve_plot_thread("records")
-    assert state.get_active_threads() == []
+    assert "CHARACTERS:" not in context
+    assert "ACTIVE THREADS:" not in context
+    assert "THEMES:" not in context
+    assert "CURRENT FOCUS:" in context
+    assert "story_segments" in payload
+    assert "characters" not in payload
+    assert "plot_threads" not in payload
+    assert "themes" not in payload

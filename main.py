@@ -41,6 +41,7 @@ from lib.pipeline import (
 )
 from lib.personalities import STORY_MODES, DEFAULT_MODEL, is_dnd_mode
 from lib.session import SessionEvent, SessionOrchestrator
+from lib.story_state import StoryAct
 
 # Initialize colorama for cross-platform colored terminal output
 init(autoreset=True)
@@ -54,13 +55,6 @@ CLI_COLOR_BY_HEX = {
     "#FFFF00": Fore.YELLOW,
     "#98C379": Fore.GREEN,
 }
-
-ACT_NAME_BY_VALUE = {
-    1: "SETUP",
-    2: "CONFRONTATION",
-    3: "RESOLUTION",
-}
-
 
 def print_banner():
     """Print the Writers Room banner."""
@@ -112,26 +106,26 @@ def display_story_state(state_payload: dict[str, Any] | None):
 
     mode = str(state_payload.get("mode", "horror"))
     act_value = state_payload.get("current_act")
-    act_name = ACT_NAME_BY_VALUE.get(act_value, str(act_value or "UNKNOWN"))
+    try:
+        act_name = StoryAct(int(act_value)).name
+    except (TypeError, ValueError):
+        act_name = str(act_value or "UNKNOWN")
     tension_level = state_payload.get("tension_level", 0)
+    word_count = state_payload.get("word_count", 0)
 
     print(f"\n{Fore.MAGENTA}{'=' * 60}")
     print(f"{Fore.MAGENTA}  CENTER TABLE: STORY STATE")
     print(f"{Fore.MAGENTA}{'=' * 60}")
     print(f"{Fore.MAGENTA}Mode: {mode.upper()} | Act: {act_name} | Tension: {tension_level}/10")
-
-    themes = state_payload.get("themes") or []
-    if themes:
-        print(f"{Fore.MAGENTA}Themes: {', '.join(themes[:3])}")
+    print(f"{Fore.MAGENTA}Words: {word_count}")
 
     if is_dnd_mode(mode):
-        open_threads = state_payload.get("open_threads", 0)
-        word_count = state_payload.get("word_count", 0)
-        print(f"{Fore.MAGENTA}Open Threads: {open_threads} | Words: {word_count}")
-    else:
-        story_needs = state_payload.get("story_needs") or []
-        if story_needs:
-            print(f"{Fore.MAGENTA}Story needs: {story_needs[0]}")
+        print(f"{Fore.MAGENTA}{'=' * 60}\n")
+        return
+
+    story_needs = state_payload.get("story_needs") or []
+    if story_needs:
+        print(f"{Fore.MAGENTA}Story needs: {story_needs[0]}")
 
     print(f"{Fore.MAGENTA}{'=' * 60}\n")
 

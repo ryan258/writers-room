@@ -326,7 +326,6 @@ class SessionOrchestrator:
              return None
 
          payload = state.to_dict()
-         payload['open_threads'] = len(state.get_active_threads())
          payload['story_needs'] = [] if is_dnd_mode(state.mode) else state.get_story_needs()
          return payload
 

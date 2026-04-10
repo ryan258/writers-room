@@ -82,14 +82,14 @@ def test_display_story_state_hides_story_needs_for_dnd(capsys):
             "mode": "dnd",
             "current_act": 1,
             "tension_level": 4,
-            "open_threads": 0,
             "word_count": 12,
             "story_needs": ["Ignore me"],
         }
     )
 
     output = capsys.readouterr().out
-    assert "Open Threads" in output
+    assert "Words: 12" in output
+    assert "Open Threads" not in output
     assert "Story needs" not in output
 
 
@@ -200,8 +200,6 @@ class DummySessionOrchestrator:
                     "mode": mode,
                     "current_act": 1,
                     "tension_level": 4,
-                    "themes": [],
-                    "open_threads": 0,
                     "word_count": 42,
                     "story_needs": [] if mode == "dnd" else ["Establish a central conflict or mystery"],
                 },
